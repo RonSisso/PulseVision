@@ -42,13 +42,16 @@ Installation
 
 
 Clone the repository:
-git clone <your-repo-url>
+git clone https://github.com/RonSisso/PulseVision.git
 cd pulsevision
 
 
 Create and activate a virtual environment:
+
 python -m venv venv
+
 venv\Scripts\activate.ps1  # On Windows
+
 source venv/bin/activate # On Linux
 
 
