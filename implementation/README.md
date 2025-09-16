@@ -23,8 +23,8 @@ PulseVision is a real-time heart rate monitoring system that uses remote photopl
 
 1. Clone the repository:
 ```bash
-git clone [repository-url]
-cd [repository-name]
+git clone https://github.com/RonSisso/PulseVision.git
+cd PulseVision/implementation
 ```
 
 2. Create a virtual environment (Python 3.11 required):
