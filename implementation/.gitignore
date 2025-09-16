@@ -5,6 +5,7 @@ env/
 ENV/
 .venv/
 .env/
+.cursorrules
 
 # Python
 __pycache__/
@@ -157,4 +158,4 @@ secrets.json
 # Project specific
 # Uncomment if you don't want to track these
 # assets/temp/
-# data/processed/ 
+implementation/.cursorrules
