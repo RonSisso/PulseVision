@@ -1,0 +1,224 @@
+{
+    "name": "PulseVision",
+    "description": "Real-time heart rate measurement from video using PPG techniques",
+    "version": "1.0.0",
+    "language": "python",
+    "root": "src",
+    "python": {
+        "venv": "venv",
+        "version": "3.12",
+        "executable": "C:\\Users\\nadav\\AppData\\Local\\Programs\\Python\\Python312\\python.exe",
+        "requirements": "requirements.txt",
+        "linting": {
+            "enabled": true,
+            "pylint": {
+                "enabled": true,
+                "rcfile": ".pylintrc"
+            },
+            "flake8": {
+                "enabled": true,
+                "config": ".flake8"
+            }
+        },
+        "formatting": {
+            "enabled": true,
+            "autopep8": {
+                "enabled": true,
+                "config": "setup.cfg"
+            }
+        },
+        "testing": {
+            "enabled": true,
+            "pytest": {
+                "enabled": true,
+                "config": "pytest.ini"
+            }
+        }
+    },
+    "search": {
+        "exclude": [
+            "**/__pycache__/**",
+            "**/.git/**",
+            "**/venv/**",
+            "**/logs/**",
+            "**/data/**",
+            "**/*.pyc"
+        ]
+    },
+    "editor": {
+        "tabSize": 4,
+        "insertSpaces": true,
+        "rulers": [80, 100],
+        "formatOnSave": true,
+        "trimTrailingWhitespace": true,
+        "insertFinalNewline": true
+    },
+    "project": {
+        "structure": {
+            "src": {
+                "video": {},
+                "face_detection": {},
+                "signal_processing": {},
+                "gui": {
+                    "templates": {}
+                },
+                "database": {}
+            },
+            "tests": {},
+            "data": {
+                "videos": {}
+            },
+            "assets": {},
+            "logs": {}
+        }
+    },
+    "rules": {
+        "general_ai_behavior": {
+            "priorities": [
+                "real-time performance",
+                "C++ for computationally heavy tasks",
+                "Python for orchestration and GUI",
+                "modular pipeline design",
+                "proper memory management"
+            ]
+        },
+        "code_structure": {
+            "python_files": {
+                "purpose": ["pipeline orchestration", "GUI", "lightweight processing"],
+                "requirements": [
+                    "PEP 8 styling",
+                    "async processing for GUI",
+                    "proper documentation"
+                ]
+            },
+            "cpp_files": {
+                "header_requirements": [
+                    "header guards or #pragma once",
+                    "clear function prototypes",
+                    "class structure definitions"
+                ],
+                "source_requirements": [
+                    "optimized implementations",
+                    "multi-threaded code",
+                    "memory management",
+                    "performance-critical tasks"
+                ],
+                "critical_tasks": [
+                    "notch filtering",
+                    "ICA",
+                    "FFT"
+                ]
+            },
+            "bindings": {
+                "preferred": "pybind11",
+                "optimization": "minimize data conversion overhead"
+            }
+        },
+        "video_processing": {
+            "framework": "OpenCV",
+            "input_handling": {
+                "method": "cv2.VideoCapture",
+                "requirements": [
+                    "efficient frame processing",
+                    "memory leak prevention",
+                    "support both file and camera input"
+                ]
+            }
+        },
+        "face_detection": {
+            "primary_method": "OpenCV Haar Cascade",
+            "roi_tracking": {
+                "preferred_methods": [
+                    "facial landmarks (dlib)",
+                    "OpenCV KCF Tracker"
+                ],
+                "avoid": "ML-heavy models unless requested"
+            }
+        },
+        "signal_processing": {
+            "default_channel": "green",
+            "enhancement": "CLAHE",
+            "real_time_filters": {
+                "cpp_implementations": [
+                    "notch filtering",
+                    "ICA",
+                    "FFT",
+                    "peak detection"
+                ]
+            },
+            "optimization": {
+                "prefer": "NumPy operations",
+                "avoid": "excessive Python loops"
+            }
+        },
+        "gui_development": {
+            "framework": "PyQt5",
+            "requirements": [
+                "non-blocking UI updates",
+                "responsive interface"
+            ],
+            "essential_elements": [
+                "live video feed",
+                "real-time BPM display",
+                "face/ROI overlays",
+                "start/stop controls",
+                "signal visualization"
+            ]
+        },
+        "documentation": {
+            "python": {
+                "required": [
+                    "docstrings",
+                    "parameter descriptions",
+                    "return value documentation"
+                ]
+            },
+            "cpp": {
+                "required": [
+                    "header comments",
+                    "function documentation",
+                    "meaningful section comments"
+                ]
+            }
+        },
+        "debugging": {
+            "python": {
+                "preferred": "logging module",
+                "avoid": "print statements"
+            },
+            "cpp": {
+                "preferred": "spdlog",
+                "required": "debug macros"
+            }
+        },
+        "optimization": {
+            "python": {
+                "prefer": "vectorized operations",
+                "avoid": "loops where possible"
+            },
+            "cpp": {
+                "requirements": [
+                    "multithreading",
+                    "SIMD instructions",
+                    "efficient memory management"
+                ]
+            }
+        },
+        "testing": {
+            "python": {
+                "framework": "pytest",
+                "requirements": [
+                    "unit tests per module",
+                    "performance benchmarks"
+                ]
+            },
+            "cpp": {
+                "framework": "Google Test",
+                "requirements": [
+                    "unit tests",
+                    "performance measurements"
+                ]
+            }
+        }
+    }
+} 

@@ -1,0 +1,1 @@
+"""GUI module for the heart rate measurement application.""" 

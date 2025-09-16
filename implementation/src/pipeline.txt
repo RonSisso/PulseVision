@@ -1,0 +1,311 @@
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                        PULSEVISION COMPLETE SYSTEM PIPELINE                     │
+│                    From Application Start to Heart Rate Output                   │
+└─────────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                           APPLICATION INITIALIZATION                            │
+└─────────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│ 0. SYSTEM STARTUP (main.py)                                                     │
+│    • Initialize logging system                                                  │
+│    • Create Qt application instance                                             │
+│    • Launch login window (LoginWindow)                                          │
+│    • Start Qt event loop                                                        │
+└─────────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│ 1. USER AUTHENTICATION (LoginWindow)                                            │
+│    • Display web-based login interface                                          │
+│    • Initialize database connection                                             │
+│    • Verify user credentials (username/password)                                │
+│    • Hash password verification using bcrypt                                    │
+│    • Update last login timestamp                                                │
+│    • Navigate to HomeWindow based on user role                                  │
+└─────────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│ 2. HOME DASHBOARD (HomeWindow)                                                  │
+│    • Display role-based navigation options                                      │
+│    • Administrator: Add users, add patients, control panel                     │
+│    • Doctor/User: Add patients, control panel                                  │
+│    • Load patient list from database                                            │
+│    • Navigate to MainWindow (Control Panel) for measurements                   │
+└─────────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│ 3. CONTROL PANEL INITIALIZATION (MainWindow)                                   │
+│    • Initialize data buffers (10-second rolling windows)                       │
+│    • Setup real-time plotting (matplotlib with FigureCanvas)                   │
+│    • Initialize video capture system (VideoCapture)                            │
+│    • Initialize signal processing pipeline (SignalProcessor)                   │
+│    • Initialize face detection (MediaPipe FaceDetector)                        │
+│    • Setup GUI controls (video display, patient selection, input type)         │
+│    • Load patient list from database                                            │
+│    • Configure timers (video: 33ms, plots: 100ms)                             │
+└─────────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│ 4. MEASUREMENT SETUP                                                            │
+│    • User selects patient from dropdown (loaded from database)                 │
+│    • User selects input source (Camera/Video File) via combo box               │
+│    • If video file: User clicks "Open File" button to select file              │
+│    • System validates patient selection before allowing start                  │
+│    • User clicks "Start" to begin measurement                                   │
+└─────────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                           VIDEO INPUT STAGE                                     │
+└─────────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│ 5. VIDEO CAPTURE (VideoCapture)                                                 │
+│    • Initialize OpenCV VideoCapture with source                                │
+│    • Try multiple backends for camera (DSHOW, MSMF, ANY)                       │
+│    • Get video properties (FPS, resolution, frame count)                       │
+│    • Start frame reading loop at ~30 FPS (33ms intervals)                      │
+│    • Frame rate control with min_frame_interval (1/60 seconds)                 │
+│    • Error handling and recovery for failed captures                           │
+└─────────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│ 6. FACE DETECTION (MediaPipe FaceDetector)                                      │
+│    • Convert frame from BGR to RGB for MediaPipe                               │
+│    • Process frame with MediaPipe FaceMesh                                     │
+│    • Extract 468 facial landmarks                                              │
+│    • Calculate face bounding box from all landmarks                            │
+│    • Extract forehead ROI (upper 30% of face, 75% width)                      │
+│    • Apply exponential moving average smoothing (α=0.6)                        │
+│    • Maintain ROI stability with 5-frame history buffer                        │
+│    • Fallback ROI calculation if landmark access fails                         │
+└─────────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│ 7. ROI VALIDATION (ROIStabilityChecker)                                        │
+│    • Convert ROI patch to grayscale                                            │
+│    • Calculate standard deviation of pixel intensities                         │
+│    • Check if std_dev >= min_std (5.0) for stability                          │
+│    • Return stability status for signal processing                             │
+└─────────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│ 8. MAIN PROCESSING LOOP (MainWindow.update_frame)                               │
+│    • Read frame from video capture                                              │
+│    • Detect face and extract ROI                                                │
+│    • Process frame through signal processing pipeline                           │
+│    • Update GUI displays (heart rate, frequency, plots)                        │
+│    • Draw ROI overlay on video frame                                            │
+│    • Handle ROI loss and signal processor reset                                 │
+└─────────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│ 9. SIGNAL EXTRACTION                                                            │
+│    • Extract green channel from ROI patch                                      │
+│    • Calculate mean green intensity value                                      │
+│    • Add to 10-second circular buffer (deque)                                  │
+│    • Store raw values for plotting and analysis                                │
+└─────────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│ 10. INITIALIZATION CHECK                                                        │
+│    • Check if 2-second initialization delay is complete                        │
+│    • Ensure buffer has at least 60 samples (2 seconds at 30 FPS)              │
+│    • Skip processing if conditions not met                                      │
+│    • Reset signal processor if ROI is lost                                     │
+└─────────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│ 11. SIGNAL PREPROCESSING (SignalPreprocessor)                                   │
+│    ┌─────────────────────────────────────────────────────────────────────────┐   │
+│    │ 11.1 TEMPORAL SMOOTHING                                                 │   │
+│    │    • Apply Savitzky-Golay filter (window=15, poly=2)                    │   │
+│    │    • ~0.5 second smoothing window                                       │   │
+│    └─────────────────────────────────────────────────────────────────────────┘   │
+│    ┌─────────────────────────────────────────────────────────────────────────┐   │
+│    │ 11.2 ADAPTIVE NOTCH FILTERING                                           │   │
+│    │    • Remove flicker noise at 1.0, 2.0, 3.0 Hz                          │   │
+│    │    • Use IIR notch filters with Q=30                                    │   │
+│    │    • Apply filtfilt for zero-phase filtering                            │   │
+│    └─────────────────────────────────────────────────────────────────────────┘   │
+│    ┌─────────────────────────────────────────────────────────────────────────┐   │
+│    │ 11.3 ROBUST NORMALIZATION                                               │   │
+│    │    • Calculate median and MAD (Median Absolute Deviation)               │   │
+│    │    • Normalize: (values - median) / mad                                 │   │
+│    │    • Outlier-resistant normalization                                    │   │
+│    └─────────────────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│ 12. SIGNAL ENHANCEMENT (enhance_ppg_signal method)                              │
+│    ┌─────────────────────────────────────────────────────────────────────────┐   │
+│    │ 12.1 BANDPASS FILTERING                                                 │   │
+│    │    • Butterworth bandpass filter (4th order)                           │   │
+│    │    • Frequency range: 0.8-3.0 Hz (48-180 BPM)                          │   │
+│    │    • Apply filtfilt for zero-phase filtering                            │   │
+│    └─────────────────────────────────────────────────────────────────────────┘   │
+│    ┌─────────────────────────────────────────────────────────────────────────┐   │
+│    │ 12.2 ADAPTIVE SMOOTHING                                                 │   │
+│    │    • Assess signal quality using Welch's PSD                           │   │
+│    │    • High quality (>0.7): Light smoothing (Savitzky-Golay 7,2)         │   │
+│    │    • Low quality (≤0.7): Aggressive smoothing (Savitzky-Golay 11,3)    │   │
+│    └─────────────────────────────────────────────────────────────────────────┘   │
+│    ┌─────────────────────────────────────────────────────────────────────────┐   │
+│    │ 12.3 BASELINE REMOVAL                                                   │   │
+│    │    • Calculate moving average baseline (window=30 samples)              │   │
+│    │    • Subtract baseline from signal                                      │   │
+│    └─────────────────────────────────────────────────────────────────────────┘   │
+│    ┌─────────────────────────────────────────────────────────────────────────┐   │
+│    │ 12.4 TEMPORAL CONSISTENCY                                               │   │
+│    │    • Check for sudden amplitude changes                                 │   │
+│    │    • Apply additional smoothing if std_diff > 2 * mean_diff            │   │
+│    └─────────────────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│ 13. HEART RATE ESTIMATION (HeartRateEstimator)                                 │
+│    ┌─────────────────────────────────────────────────────────────────────────┐   │
+│    │ 13.1 FREQUENCY DOMAIN ANALYSIS                                          │   │
+│    │    • Apply Welch's power spectral density                              │   │
+│    │    • Window size: min(512, signal_length)                              │   │
+│    │    • FFT size: 2^12 for high frequency resolution                      │   │
+│    └─────────────────────────────────────────────────────────────────────────┘   │
+│    ┌─────────────────────────────────────────────────────────────────────────┐   │
+│    │ 13.2 HEART RATE BAND FILTERING                                          │   │
+│    │    • Focus on 0.67-3.0 Hz (40-180 BPM)                                │   │
+│    │    • Extract power spectrum in heart rate band                         │   │
+│    └─────────────────────────────────────────────────────────────────────────┘   │
+│    ┌─────────────────────────────────────────────────────────────────────────┐   │
+│    │ 13.3 PEAK DETECTION & SCORING                                           │   │
+│    │    • Find peaks with distance=5, prominence=0.15*max_power             │   │
+│    │    • Score peaks based on:                                             │   │
+│    │      - Prominence (70% weight)                                         │   │
+│    │      - Separation from other peaks (30% weight)                        │   │
+│    └─────────────────────────────────────────────────────────────────────────┘   │
+│    ┌─────────────────────────────────────────────────────────────────────────┐   │
+│    │ 13.4 STABILITY & CONVERGENCE                                            │   │
+│    │    • Convergence mode: First 30 seconds allow larger changes           │   │
+│    │    • Stability check: Reject changes >15 BPM (after convergence)       │   │
+│    │    • Confidence-based acceptance of new values                         │   │
+│    └─────────────────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│ 14. OUTLIER FILTERING (HeartRateFilter)                                        │
+│    ┌─────────────────────────────────────────────────────────────────────────┐   │
+│    │ 14.1 TEMPORAL FILTERING                                                │   │
+│    │    • Maintain 5-sample history buffer                                  │   │
+│    │    • Calculate median of recent values                                 │   │
+│    └─────────────────────────────────────────────────────────────────────────┘   │
+│    ┌─────────────────────────────────────────────────────────────────────────┐   │
+│    │ 14.2 OUTLIER DETECTION                                                 │   │
+│    │    • Calculate z-scores for all values in buffer                       │   │
+│    │    • Reject values with |z-score| > 2.5                               │   │
+│    │    • Return median if outlier detected                                 │   │
+│    └─────────────────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│ 15. GUI DISPLAY & DATA PERSISTENCE                                              │
+│    ┌─────────────────────────────────────────────────────────────────────────┐   │
+│    │ 15.1 REAL-TIME DISPLAY                                                  │   │
+│    │    • Update heart rate display (BPM)                                   │   │
+│    │    • Update frequency display (Hz)                                     │   │
+│    │    • Update signal quality indicators                                  │   │
+│    │    • Draw ROI overlay on video frame                                   │   │
+│    └─────────────────────────────────────────────────────────────────────────┘   │
+│    ┌─────────────────────────────────────────────────────────────────────────┐   │
+│    │ 15.2 PLOTTING & VISUALIZATION                                          │   │
+│    │    • Update real-time signal plot (raw green channel)                  │   │
+│    │    • Update heart rate trend plot                                      │   │
+│    │    • Maintain 10-second rolling window                                 │   │
+│    │    • Update plots every 100ms                                          │   │
+│    └─────────────────────────────────────────────────────────────────────────┘   │
+│    ┌─────────────────────────────────────────────────────────────────────────┐   │
+│    │ 15.3 DATABASE INTEGRATION                                               │   │
+│    │    • Save measurement to SQLite database                               │   │
+│    │    • Store: patient_id, timestamp, heart_rate, status                  │   │
+│    │    • Determine status: Normal (60-100), Bradycardia (<60), Tachycardia (>100) │
+│    │    • Link measurement to selected patient                              │   │
+│    │    • Update patient measurement history                                │   │
+│    └─────────────────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│ 16. MEASUREMENT COMPLETION                                                      │
+│    • User clicks "Stop" to end measurement                                     │
+│    • Video capture stops                                                       │
+│    • Signal processing resets                                                  │
+│    • Data buffers cleared                                                      │
+│    • Reset button enabled for data clearing                                   │
+│    • Return to ready state for next measurement                               │
+└─────────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                              SYSTEM COMPONENTS                                 │
+└─────────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│ CORE MODULES:                                                                   │
+│ • main.py - Application entry point and initialization                         │
+│ • video/capture.py - Video input handling (camera/file)                       │
+│ • face_detection/mediapipe_detector.py - Face detection and ROI extraction     │
+│ • signal_processing/processor.py - Main signal processing orchestrator         │
+│ • signal_processing/preprocessing.py - Signal filtering and normalization      │
+│ • signal_processing/hr_estimation.py - Heart rate estimation algorithms       │
+│ • signal_processing/filtering.py - Outlier detection and temporal filtering   │
+│ • database/db.py - SQLite database operations                                  │
+└─────────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│ GUI MODULES:                                                                    │
+│ • gui/login_window.py - User authentication interface                          │
+│ • gui/home_window.py - Main dashboard and navigation                           │
+│ • gui/main_window.py - Measurement control panel and real-time display        │
+│ • gui/add_patient_window.py - Patient registration interface                   │
+│ • gui/add_user_window.py - User management interface                           │
+│ • gui/base_window.py - Common window functionality                             │
+└─────────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│ DATA FLOW SUMMARY:                                                              │
+│ 1. User Authentication → Database Verification                                 │
+│ 2. Patient Selection → Database Query                                          │
+│ 3. Video Input → Frame Processing                                              │
+│ 4. Face Detection → ROI Extraction                                             │
+│ 5. Signal Extraction → Green Channel Analysis                                  │
+│ 6. Signal Processing → Multi-stage Filtering                                   │
+│ 7. Signal Enhancement → Bandpass Filtering & Adaptive Smoothing                │
+│ 8. Heart Rate Estimation → Frequency Domain Analysis                           │
+│ 9. Outlier Filtering → Temporal Smoothing                                      │
+│ 10. GUI Display → Real-time Visualization                                      │
+│ 11. Database Storage → Measurement Persistence                                 │
+└─────────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│ PERFORMANCE CHARACTERISTICS:                                                    │
+│ • Real-time processing at ~30 FPS                                              │
+│ • 2-second initialization delay                                                │
+│ • 10-second signal buffer for analysis                                         │
+│ • Adaptive processing based on signal quality                                  │
+│ • Robust error handling and recovery                                           │
+│ • Multi-threaded GUI updates                                                   │
+└─────────────────────────────────────────────────────────────────────────────────┘

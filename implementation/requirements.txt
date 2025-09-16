@@ -1,0 +1,10 @@
+numpy>=1.21.0
+opencv-python>=4.5.3.56
+PyQt5>=5.15.4
+PyQtWebEngine>=5.15.4
+scipy>=1.7.0
+scikit-learn>=0.24.2
+pybind11>=2.7.0
+matplotlib>=3.4.3
+bcrypt>=4.0.1
+mediapipe>=0.8.9 

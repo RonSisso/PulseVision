@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PulseVision - Login</title>
+    <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        body {
+            background-color: #f0f2f5;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .container {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: space-around;
+            padding: 2rem;
+        }
+
+        .login-image {
+            width: 50%;
+            max-width: 600px;
+        }
+
+        .login-form {
+            background: white;
+            padding: 2rem;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            width: 400px;
+        }
+
+        .login-form h1 {
+            color: #333;
+            margin-bottom: 1.5rem;
+            text-align: center;
+        }
+
+        .form-group {
+            margin-bottom: 1rem;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 0.5rem;
+            color: #666;
+        }
+
+        .form-group input {
+            width: 100%;
+            padding: 0.75rem;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 1rem;
+        }
+
+        .form-group input:focus {
+            outline: none;
+            border-color: #6c63ff;
+        }
+
+        .forgot-password {
+            text-align: right;
+            margin-bottom: 1rem;
+        }
+
+        .forgot-password a {
+            color: #6c63ff;
+            text-decoration: none;
+            font-size: 0.9rem;
+        }
+
+        .login-button {
+            width: 100%;
+            padding: 0.75rem;
+            background-color: #6c63ff;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+
+        .login-button:hover {
+            background-color: #5b52ff;
+        }
+
+        .error-message {
+            color: #ff4444;
+            text-align: center;
+            margin-top: 1rem;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <img src="file:///C:/Users/nadav/Desktop/final_project/assets/login.png" alt="Login illustration" class="login-image">
+        <div class="login-form">
+            <h1>Login</h1>
+            <form id="loginForm">
+                <div class="form-group">
+                    <label for="username">Username</label>
+                    <input type="text" id="username" name="username" required>
+                </div>
+                <div class="form-group">
+                    <label for="password">Password</label>
+                    <input type="password" id="password" name="password" required>
+                </div>
+                <div class="forgot-password">
+                    <a href="#">Forgot Password?</a>
+                </div>
+                <button type="submit" class="login-button">Login</button>
+                <div id="errorMessage" class="error-message"></div>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        // Will be initialized by QWebChannel
+        var backend = null;
+        var loginInProgress = false;
+
+        // Initialize QWebChannel
+        new QWebChannel(qt.webChannelTransport, function(channel) {
+            backend = channel.objects.backend;
+            console.log("QWebChannel initialized");
+        });
+
+        function handleLogin(e) {
+            if (e) {
+                e.preventDefault();
+            }
+            
+            if (loginInProgress) {
+                return;
+            }
+
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            const errorMessage = document.getElementById('errorMessage');
+            const loginButton = document.querySelector('.login-button');
+
+            if (!username || !password) {
+                errorMessage.style.display = 'block';
+                errorMessage.textContent = 'Please enter both username and password';
+                return;
+            }
+
+            // Clear any previous error messages
+            errorMessage.style.display = 'none';
+            errorMessage.textContent = '';
+
+            // Disable the login button and show loading state
+            loginInProgress = true;
+            loginButton.disabled = true;
+            loginButton.textContent = 'Logging in...';
+
+            // Call Python backend
+            if (backend) {
+                try {
+                    backend.login(username, password);
+                } catch (error) {
+                    errorMessage.style.display = 'block';
+                    errorMessage.textContent = 'Error during login: ' + error.message;
+                    // Reset button state
+                    loginButton.disabled = false;
+                    loginButton.textContent = 'Login';
+                    loginInProgress = false;
+                }
+            } else {
+                errorMessage.style.display = 'block';
+                errorMessage.textContent = 'System error: Backend not initialized';
+                // Reset button state
+                loginButton.disabled = false;
+                loginButton.textContent = 'Login';
+                loginInProgress = false;
+            }
+        }
+
+        // Handle form submission
+        document.getElementById('loginForm').addEventListener('submit', handleLogin);
+
+        // Handle enter key press
+        document.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter' && !loginInProgress) {
+                e.preventDefault();
+                handleLogin();
+            }
+        });
+
+        // Reset login state if the page is reloaded
+        window.onload = function() {
+            loginInProgress = false;
+            const loginButton = document.querySelector('.login-button');
+            loginButton.disabled = false;
+            loginButton.textContent = 'Login';
+        };
+    </script>
+</body>
+</html> 

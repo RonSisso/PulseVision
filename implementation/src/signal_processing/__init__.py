@@ -1,0 +1,1 @@
+"""Signal processing and heart rate calculation module.""" 
