@@ -48,7 +48,7 @@ cd pulsevision
 
 Create and activate a virtual environment:
 python -m venv venv
-venv\Scripts\activate  # On Windows
+venv\Scripts\activate.ps1  # On Windows
 source venv/bin/activate
 
 
