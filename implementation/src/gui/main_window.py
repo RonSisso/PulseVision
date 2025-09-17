@@ -64,6 +64,11 @@ class MainWindow(BaseWindow):
         
         # Initialize quality indicator
         self.setup_quality_indicator()
+        
+        # Measurement session tracking for average calculation
+        self.session_hr_values = []  # Store HR values for current session
+        self.session_start_time = None  # When current session started
+        self.session_measurement_started = False  # Whether we have valid HR data
 
     def init_ui(self):
         """Initialize the user interface."""
@@ -229,14 +234,50 @@ class MainWindow(BaseWindow):
         patient_info_layout.addWidget(self.patient_info_value)
         measurements_layout.addLayout(patient_info_layout)
         
-        # Heart rate display
+        # Heart rate display with colored background
         hr_layout = QHBoxLayout()
         hr_label = QLabel('Heart Rate:')
         hr_label.setStyleSheet('font-weight: bold;')
+        
+        # Create a container widget for heart rate with colored background
+        self.hr_container = QWidget()
+        self.hr_container.setStyleSheet(f"""
+            QWidget {{
+                background-color: #f0f0f0;
+                border: 2px solid #ccc;
+                border-radius: {self.scaled(8)}px;
+                padding: {self.scaled(12)}px;
+                margin: {self.scaled(2)}px;
+            }}
+        """)
+        hr_container_layout = QVBoxLayout(self.hr_container)
+        hr_container_layout.setContentsMargins(self.scaled(12), self.scaled(12), self.scaled(12), self.scaled(12))
+        hr_container_layout.setSpacing(self.scaled(6))
+        
+        # Heart rate value label
         self.heart_rate_value = QLabel('-- BPM')
-        self.heart_rate_value.setStyleSheet('font-weight: bold;')
+        self.heart_rate_value.setStyleSheet(f"""
+            font-weight: bold;
+            font-size: {self.scaled(18)}px;
+            color: #333;
+        """)
+        self.heart_rate_value.setAlignment(Qt.AlignCenter)
+        hr_container_layout.addWidget(self.heart_rate_value)
+        
+        # Status message label (always visible with fixed height)
+        self.hr_alert_label = QLabel('ROI Not Found')
+        self.hr_alert_label.setStyleSheet(f"""
+            font-weight: bold;
+            font-size: {self.scaled(14)}px;
+            color: #666;
+            background-color: transparent;
+        """)
+        self.hr_alert_label.setAlignment(Qt.AlignCenter)
+        
+        hr_container_layout.addWidget(self.hr_alert_label)
+        
         hr_layout.addWidget(hr_label)
-        hr_layout.addWidget(self.heart_rate_value)
+        hr_layout.addWidget(self.hr_container)
         measurements_layout.addLayout(hr_layout)
         
         # Signal quality indicator
@@ -474,6 +515,11 @@ class MainWindow(BaseWindow):
                 self.start_button.setText("Stop")
                 self.start_time = time.time()
                 
+                # Initialize measurement session tracking
+                self.session_hr_values.clear()
+                self.session_start_time = time.time()
+                self.session_measurement_started = False
+                
                 # Reset data buffers for new measurement
                 self.signal_times.clear()
                 self.signal_values.clear()
@@ -497,6 +543,9 @@ class MainWindow(BaseWindow):
         """Stop video capture and processing."""
         try:
             if self.is_running:
+                # Calculate and save session average before stopping
+                self.calculate_and_save_session_average()
+                
                 self.video_timer.stop()
                 self.plot_timer.stop()
                 self.video_capture.stop()
@@ -519,6 +568,11 @@ class MainWindow(BaseWindow):
                 self.cardiac_cycle_data.clear()
                 self.start_time = None
                 
+                # Reset session tracking
+                self.session_hr_values.clear()
+                self.session_start_time = None
+                self.session_measurement_started = False
+                
                 # Reset signal processor for fresh measurement
                 if hasattr(self, 'signal_processor'):
                     self.signal_processor.reset()
@@ -531,6 +585,9 @@ class MainWindow(BaseWindow):
                 self.heart_rate_value.setText('-- BPM')
                 self.freq_value.setText('-- Hz')
                 self.method_value.setText('--')
+                
+                # Reset heart rate container to default styling
+                self.reset_hr_container_style()
                 
                 # Enable reset button if we had data before clearing
                 if has_data:
@@ -558,6 +615,11 @@ class MainWindow(BaseWindow):
         self.fft_freqs.clear()
         self.fft_power.clear()
         
+        # Reset session tracking
+        self.session_hr_values.clear()
+        self.session_start_time = None
+        self.session_measurement_started = False
+        
         # Reset signal processor for fresh measurement
         if hasattr(self, 'signal_processor'):
             self.signal_processor.reset()
@@ -570,6 +632,9 @@ class MainWindow(BaseWindow):
         self.heart_rate_value.setText('-- BPM')
         self.freq_value.setText('-- Hz')
         self.method_value.setText('--')
+        
+        # Reset heart rate container to default styling
+        self.reset_hr_container_style()
         
         # Enable reset button if we had data before clearing
         if has_data:
@@ -673,10 +738,15 @@ class MainWindow(BaseWindow):
                 self.heart_rate_value.setText("-- BPM")
                 self.freq_value.setText("-- Hz")
                 self.method_value.setText("--")
+                # Reset heart rate container to default styling
+                self.reset_hr_container_style()
                 # Don't clear plot data - keep history for graphs
             
             # Process frame if we have valid ROIs
             if self.current_rois is not None and any(self.current_rois.values()):
+                # Show measuring status
+                self.update_hr_status_message("Measuring...", "#4A90E2")
+                
                 # Calculate combined green channel mean from all ROIs
                 total_green_mean = 0.0
                 valid_rois = 0
@@ -758,6 +828,8 @@ class MainWindow(BaseWindow):
                         cv2.putText(frame, roi_name.replace('_', ' ').title(), 
                                   (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
             else:
+                # No ROIs detected - show ROI not found message
+                self.update_hr_status_message("ROI Not Found", "#666")
                 # Call signal processor with None ROIs to trigger reset
                 self.signal_processor.process_frame(frame, None)
             
@@ -829,6 +901,16 @@ class MainWindow(BaseWindow):
         try:
             self.heart_rate_value.setText(f"{bpm:.1f} BPM")
             
+            # Update heart rate container styling based on BPM value
+            self.update_hr_container_style(bpm)
+            
+            # Track heart rate for session average calculation
+            if not self.session_measurement_started:
+                self.session_measurement_started = True
+                self.logger.info("Heart rate measurement started for session average")
+            
+            self.session_hr_values.append(bpm)
+            
             # Update plot data with relative time
             if self.start_time is None:
                 self.start_time = time.time()
@@ -863,6 +945,180 @@ class MainWindow(BaseWindow):
             
         except Exception as e:
             self.logger.error("Error updating HR display: %s", str(e))
+
+    def update_hr_container_style(self, bpm):
+        """Update the heart rate container styling based on BPM value."""
+        try:
+            # Define heart rate ranges and colors
+            if bpm < 40:
+                # Very low heart rate - Red alert
+                bg_color = "#FF4444"  # Red
+                border_color = "#CC0000"  # Darker red
+                text_color = "#FFFFFF"  # White text
+                alert_text = "CRITICAL: Very Low HR"
+            elif bpm < 50:
+                # Low heart rate - Orange warning
+                bg_color = "#FF8800"  # Orange
+                border_color = "#CC6600"  # Darker orange
+                text_color = "#FFFFFF"  # White text
+                alert_text = "WARNING: Low HR"
+            elif bpm <= 120:
+                # Normal heart rate - Green
+                bg_color = "#44FF44"  # Green
+                border_color = "#00CC00"  # Darker green
+                text_color = "#000000"  # Black text
+                alert_text = "NORMAL"
+            else:
+                # High heart rate - Red alert
+                bg_color = "#FF4444"  # Red
+                border_color = "#CC0000"  # Darker red
+                text_color = "#FFFFFF"  # White text
+                alert_text = "ALERT: High HR"
+            
+            # Update container styling
+            self.hr_container.setStyleSheet(f"""
+                QWidget {{
+                    background-color: {bg_color};
+                    border: 2px solid {border_color};
+                    border-radius: {self.scaled(8)}px;
+                    padding: {self.scaled(12)}px;
+                    margin: {self.scaled(2)}px;
+                }}
+            """)
+            
+            # Update heart rate value text color
+            self.heart_rate_value.setStyleSheet(f"""
+                font-weight: bold;
+                font-size: {self.scaled(18)}px;
+                color: {text_color};
+            """)
+            
+            # Always show alert message with appropriate content
+            self.hr_alert_label.setText(alert_text)
+            self.hr_alert_label.setStyleSheet(f"""
+                font-weight: bold;
+                font-size: {self.scaled(14)}px;
+                color: {text_color};
+                background-color: transparent;
+            """)
+                
+        except Exception as e:
+            self.logger.error(f"Error updating HR container style: {str(e)}")
+
+    def reset_hr_container_style(self):
+        """Reset the heart rate container to default styling."""
+        try:
+            # Reset to default neutral styling
+            self.hr_container.setStyleSheet(f"""
+                QWidget {{
+                    background-color: #f0f0f0;
+                    border: 2px solid #ccc;
+                    border-radius: {self.scaled(8)}px;
+                    padding: {self.scaled(12)}px;
+                    margin: {self.scaled(2)}px;
+                }}
+            """)
+            
+            # Reset heart rate value text color to default
+            self.heart_rate_value.setStyleSheet(f"""
+                font-weight: bold;
+                font-size: {self.scaled(18)}px;
+                color: #333;
+            """)
+            
+            # Show ROI not found message
+            self.hr_alert_label.setText("ROI Not Found")
+            self.hr_alert_label.setStyleSheet(f"""
+                font-weight: bold;
+                font-size: {self.scaled(14)}px;
+                color: #666;
+                background-color: transparent;
+            """)
+            
+        except Exception as e:
+            self.logger.error(f"Error resetting HR container style: {str(e)}")
+
+    def update_hr_status_message(self, message, color="#666"):
+        """Update the heart rate status message without changing the container styling."""
+        try:
+            self.hr_alert_label.setText(message)
+            self.hr_alert_label.setStyleSheet(f"""
+                font-weight: bold;
+                font-size: {self.scaled(14)}px;
+                color: {color};
+                background-color: transparent;
+            """)
+        except Exception as e:
+            self.logger.error(f"Error updating HR status message: {str(e)}")
+
+    def calculate_and_save_session_average(self):
+        """Calculate accurate average heart rate and save measurement session to database."""
+        try:
+            if not self.session_measurement_started or len(self.session_hr_values) == 0:
+                self.logger.info("No heart rate data available for session average")
+                return
+            
+            # Calculate measurement duration
+            if self.session_start_time:
+                measurement_duration = time.time() - self.session_start_time
+            else:
+                measurement_duration = 0
+            
+            # Minimum requirements for a valid measurement session
+            MIN_DURATION_SECONDS = 30  # At least 30 seconds
+            MIN_MEASUREMENTS = 15      # At least 15 heart rate readings
+            
+            if measurement_duration < MIN_DURATION_SECONDS:
+                self.logger.info(f"Measurement session too short ({measurement_duration:.1f}s < {MIN_DURATION_SECONDS}s). Not saving session.")
+                return
+            
+            if len(self.session_hr_values) < MIN_MEASUREMENTS:
+                self.logger.info(f"Too few measurements ({len(self.session_hr_values)} < {MIN_MEASUREMENTS}). Not saving session.")
+                return
+            
+            # Calculate accurate average heart rate
+            avg_hr = sum(self.session_hr_values) / len(self.session_hr_values)
+            
+            # Get patient information
+            patient_id = self.get_selected_patient_id()
+            if not patient_id:
+                self.logger.warning("No patient selected for session average")
+                return
+            
+            # Save measurement session to database
+            from database.db import Database
+            db = Database()
+            
+            # Get current date and time
+            from datetime import datetime
+            current_datetime = datetime.now()
+            
+            # Determine status based on average heart rate
+            if 60 <= avg_hr <= 100:
+                status = "Normal"
+            elif avg_hr < 60:
+                status = "Bradycardia"
+            else:
+                status = "Tachycardia"
+            
+            # Save session measurement
+            success = db.add_measurement_session(
+                patient_id=patient_id,
+                avg_heart_rate=round(avg_hr, 1),
+                status=status,
+                measurement_date=current_datetime.date(),
+                measurement_time=current_datetime.time(),
+                duration_seconds=round(measurement_duration, 1),
+                total_measurements=len(self.session_hr_values)
+            )
+            
+            if success:
+                self.logger.info(f"Session average saved: {avg_hr:.1f} BPM over {measurement_duration:.1f}s with {len(self.session_hr_values)} measurements")
+            else:
+                self.logger.error("Failed to save session average to database")
+                
+        except Exception as e:
+            self.logger.error(f"Error calculating and saving session average: {str(e)}")
 
     def update_plots(self):
         """Update signal, heart rate, and FFT plots."""
@@ -981,6 +1237,11 @@ class MainWindow(BaseWindow):
         self.signal_values.clear()
         self.start_time = None
         
+        # Reset session tracking
+        self.session_hr_values.clear()
+        self.session_start_time = None
+        self.session_measurement_started = False
+        
         # Reset signal processor for fresh measurement
         if hasattr(self, 'signal_processor'):
             self.signal_processor.reset()
@@ -1001,6 +1262,9 @@ class MainWindow(BaseWindow):
         self.heart_rate_value.setText('-- BPM')
         self.freq_value.setText('-- Hz')
         self.method_value.setText('--')
+        
+        # Reset heart rate container to default styling
+        self.reset_hr_container_style()
         
         # Disable reset button since no data is available after reset
         self.reset_button.setEnabled(False)

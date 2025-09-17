@@ -5,6 +5,7 @@ from PyQt5.QtGui import QFont, QPixmap
 from .main_window import MainWindow
 from .add_patient_window import AddPatientWindow
 from .add_user_window import AddUserWindow
+from .measurement_history_window import MeasurementHistoryWindow
 from .base_window import BaseWindow
 
 class HomeWindow(BaseWindow):
@@ -233,6 +234,15 @@ class HomeWindow(BaseWindow):
         control_panel_btn.clicked.connect(self.show_control_panel)
         layout.addWidget(control_panel_btn)
         
+        # Measurement History button
+        history_btn = QPushButton('Measurement History')
+        history_btn.setFixedHeight(button_height)
+        if not horizontal:
+            history_btn.setFixedWidth(button_width)
+        history_btn.setStyleSheet(button_style)
+        history_btn.clicked.connect(self.show_measurement_history)
+        layout.addWidget(history_btn)
+        
         # Logout button
         logout_btn = QPushButton('Logout')
         logout_btn.setFixedHeight(button_height)
@@ -260,6 +270,12 @@ class HomeWindow(BaseWindow):
         # Store the user role in the main window for later use
         self.main_window.user_role = self.user_role
         self.main_window.show()
+        self.hide()
+
+    def show_measurement_history(self):
+        """Show the measurement history window."""
+        self.measurement_history_window = MeasurementHistoryWindow(user_role=self.user_role)
+        self.measurement_history_window.show()
         self.hide()
 
     def logout(self):

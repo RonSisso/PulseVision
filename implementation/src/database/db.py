@@ -75,6 +75,22 @@ class Database:
         )
         ''')
         
+        # Measurement sessions table
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS measurement_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            patient_id TEXT NOT NULL,
+            avg_heart_rate REAL NOT NULL,
+            status TEXT NOT NULL,
+            measurement_date DATE NOT NULL,
+            measurement_time TIME NOT NULL,
+            duration_seconds REAL NOT NULL,
+            total_measurements INTEGER NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (patient_id) REFERENCES patients(id)
+        )
+        ''')
+        
         self.conn.commit()
 
     def create_admin_if_not_exists(self):
@@ -255,6 +271,67 @@ class Database:
             return True
         except sqlite3.IntegrityError:
             return False
+
+    def add_measurement_session(self, patient_id, avg_heart_rate, status, measurement_date, measurement_time, duration_seconds, total_measurements):
+        """Add a measurement session with average heart rate to the database."""
+        try:
+            cursor = self.conn.cursor()
+            
+            # Convert datetime objects to strings for SQLite compatibility
+            date_str = measurement_date.isoformat() if hasattr(measurement_date, 'isoformat') else str(measurement_date)
+            time_str = measurement_time.isoformat() if hasattr(measurement_time, 'isoformat') else str(measurement_time)
+            
+            cursor.execute('''
+            INSERT INTO measurement_sessions (patient_id, avg_heart_rate, status, measurement_date, measurement_time, duration_seconds, total_measurements)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (patient_id, avg_heart_rate, status, date_str, time_str, duration_seconds, total_measurements))
+            self.conn.commit()
+            self.logger.info(f"Measurement session saved for patient {patient_id}: {avg_heart_rate} BPM avg over {duration_seconds}s")
+            return True
+        except Exception as e:
+            self.logger.error(f"Error adding measurement session: {str(e)}")
+            return False
+
+    def get_measurement_sessions(self, patient_id=None):
+        """Get measurement sessions, optionally filtered by patient."""
+        try:
+            cursor = self.conn.cursor()
+            if patient_id:
+                cursor.execute('''
+                SELECT ms.*, p.first_name, p.last_name
+                FROM measurement_sessions ms
+                JOIN patients p ON ms.patient_id = p.id
+                WHERE ms.patient_id = ?
+                ORDER BY ms.created_at DESC
+                ''', (patient_id,))
+            else:
+                cursor.execute('''
+                SELECT ms.*, p.first_name, p.last_name
+                FROM measurement_sessions ms
+                JOIN patients p ON ms.patient_id = p.id
+                ORDER BY ms.created_at DESC
+                ''')
+            
+            results = cursor.fetchall()
+            sessions = []
+            for result in results:
+                session_data = {
+                    'id': result[0],
+                    'patient_id': result[1],
+                    'avg_heart_rate': result[2],
+                    'status': result[3],
+                    'measurement_date': result[4],
+                    'measurement_time': result[5],
+                    'duration_seconds': result[6],
+                    'total_measurements': result[7],
+                    'created_at': result[8],
+                    'patient_name': f"{result[9]} {result[10]}"
+                }
+                sessions.append(session_data)
+            return sessions
+        except Exception as e:
+            self.logger.error(f"Error getting measurement sessions: {str(e)}")
+            return []
 
     def __del__(self):
         """Close database connection."""
