@@ -2,6 +2,7 @@ from PyQt5.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QLabel, QPushButt
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont, QColor, QPixmap, QIcon
 import os
+from utils.path_utils import get_assets_path
 
 class BaseWindow(QMainWindow):
     def __init__(self, show_back_button=True, show_power_off=True):
@@ -70,7 +71,7 @@ class BaseWindow(QMainWindow):
             back_button.setCursor(Qt.PointingHandCursor)
             
             # Use back button image
-            back_icon = QPixmap(os.path.join('assets', 'back_button.png'))
+            back_icon = QPixmap(get_assets_path('back_button.png'))
             back_button.setIcon(QIcon(back_icon))
             back_button.setIconSize(back_button.size())
             back_button.setStyleSheet(f"""

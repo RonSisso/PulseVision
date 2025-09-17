@@ -3,6 +3,7 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout,
                            QPushButton, QLabel, QLineEdit, QMessageBox)
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont, QPixmap
+from utils.path_utils import get_assets_path
 from database.db import Database
 from .base_window import BaseWindow
 
@@ -19,10 +20,13 @@ class AddPatientWindow(BaseWindow):
         main_widget = QWidget()
         main_layout = QHBoxLayout(main_widget)
         
-        # Left side - Image
+        # Left side - Image (half screen width)
         image_label = QLabel()
-        pixmap = QPixmap(os.path.join('assets', 'add_patient.png'))
-        image_label.setPixmap(pixmap.scaled(600, 600, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        pixmap = QPixmap(get_assets_path('add_patient.png'))
+        # Scale image to half screen width
+        image_width = int(self.screen_width * 0.5)
+        image_height = self.screen_height - self.scaled(80)  # Screen height minus header
+        image_label.setPixmap(pixmap.scaled(image_width, image_height, Qt.KeepAspectRatio, Qt.SmoothTransformation))
         main_layout.addWidget(image_label)
         
         # Right side - Form

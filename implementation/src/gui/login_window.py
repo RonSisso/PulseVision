@@ -4,6 +4,7 @@ from PyQt5.QtWidgets import QMessageBox
 from PyQt5.QtWebEngineWidgets import QWebEngineView
 from PyQt5.QtCore import QUrl, pyqtSlot, QObject, QTimer
 from PyQt5.QtWebChannel import QWebChannel
+from utils.path_utils import get_assets_path_for_html
 from .home_window import HomeWindow
 from database.db import Database
 from .base_window import BaseWindow
@@ -119,14 +120,11 @@ class LoginWindow(BaseWindow):
                 html_content = f.read()
             
             # Replace the image path with the correct absolute path
-            assets_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'assets'))
-            login_image_path = os.path.join(assets_dir, 'login.png')
-            if os.path.exists(login_image_path):
-                normalized_path = login_image_path.replace("\\", "/")
-                html_content = html_content.replace(
-                    'file:///C:/Users/nadav/Desktop/final_project/assets/login.png',
-                    f'file:///{normalized_path}'
-                )
+            login_image_url = get_assets_path_for_html('login.png')
+            html_content = html_content.replace(
+                'PLACEHOLDER_LOGIN_IMAGE_PATH',
+                login_image_url
+            )
             
             # Scale the UI elements based on screen size
             html_content = html_content.replace('font-size: 1.5rem', f'font-size: {int(self.screen_height * 0.03)}px')

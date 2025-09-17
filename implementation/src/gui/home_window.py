@@ -2,6 +2,7 @@ import os
 from PyQt5.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont, QPixmap
+from utils.path_utils import get_assets_path
 from .main_window import MainWindow
 from .add_patient_window import AddPatientWindow
 from .add_user_window import AddUserWindow
@@ -75,7 +76,7 @@ class HomeWindow(BaseWindow):
         # Add menu image that fills the entire right panel
         menu_image = QLabel()
         menu_image.setContentsMargins(0, 0, 0, 0)
-        menu_pixmap = QPixmap(os.path.join('assets', 'menu.png'))
+        menu_pixmap = QPixmap(get_assets_path('menu.png'))
         
         # Calculate exact available space (full right panel)
         available_width = int(self.screen_width * 0.7)  # 70% of screen width
@@ -124,7 +125,7 @@ class HomeWindow(BaseWindow):
         
         # Small menu image (right side)
         menu_image = QLabel()
-        menu_pixmap = QPixmap(os.path.join('assets', 'menu.png'))
+        menu_pixmap = QPixmap(get_assets_path('menu.png'))
         # Smaller image for vertical layout
         max_image_width = self.scaled(150)
         max_image_height = self.scaled(150)

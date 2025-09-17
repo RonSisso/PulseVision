@@ -3,6 +3,7 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout,
                            QPushButton, QLabel, QLineEdit, QComboBox, QMessageBox)
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont, QPixmap
+from utils.path_utils import get_assets_path
 from database.db import Database
 from .base_window import BaseWindow
 
@@ -21,7 +22,7 @@ class AddUserWindow(BaseWindow):
         
         # Left side - Image (half screen width)
         image_label = QLabel()
-        pixmap = QPixmap(os.path.join('assets', 'add_patient.png'))
+        pixmap = QPixmap(get_assets_path('add_patient.png'))
         # Scale image to half screen width
         image_width = int(self.screen_width * 0.5)
         image_height = self.screen_height - self.scaled(80)  # Screen height minus header
