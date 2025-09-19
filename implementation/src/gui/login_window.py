@@ -9,16 +9,6 @@ from .home_window import HomeWindow
 from database.db import Database
 from .base_window import BaseWindow
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('logs/app.log'),
-        logging.StreamHandler()
-    ]
-)
-
 class WebBridge(QObject):
     """Bridge class for communication between JavaScript and Python."""
     def __init__(self, login_window):
@@ -86,8 +76,6 @@ class LoginWindow(BaseWindow):
         self.bridge = None
         self.channel = None
         
-        # Create logs directory if it doesn't exist
-        os.makedirs('logs', exist_ok=True)
         
         try:
             self.init_ui()
