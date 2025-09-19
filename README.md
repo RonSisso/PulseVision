@@ -43,7 +43,7 @@ Installation
 
 Clone the repository:
 git clone https://github.com/RonSisso/PulseVision.git
-cd pulsevision
+cd pulsevision/implementation
 
 
 Create and activate a virtual environment:
