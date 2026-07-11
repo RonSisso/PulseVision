@@ -1,0 +1,7 @@
+{
+  "clips": [
+    { "path": "clips/rest_daylight.mp4", "true_bpm": 76, "label": "rest, daylight" },
+    { "path": "clips/rest_lamp.mp4", "true_bpm": 68, "label": "rest, warm lamp" },
+    { "path": "clips/after_stairs.mp4", "true_bpm": 105, "label": "after climbing stairs" }
+  ]
+}
