@@ -1,8 +1,6 @@
 import numpy as np
 import cv2
 from collections import deque
-from scipy.stats import zscore
-from scipy.signal import butter, filtfilt
 
 class HeartRateFilter:
     def __init__(self, window_size=5):  # Smaller window for more responsive filtering

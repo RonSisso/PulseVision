@@ -1,9 +1,7 @@
-import os
 import cv2
 import numpy as np
 import time
 import logging
-import signal
 from collections import deque
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
@@ -13,7 +11,6 @@ from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QImage, QPixmap
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
-from matplotlib.figure import Figure
 
 from .base_window import BaseWindow
 from signal_processing.processor import SignalProcessor
@@ -38,30 +35,25 @@ class MainWindow(BaseWindow):
         
         # Set up logging
         self.logger = logging.getLogger(__name__)
-        
+
         # Data buffers for plotting
-        max_samples = int(self.window_duration * 30)  # 30 fps * 10 seconds
-        self.signal_times = deque(maxlen=max_samples)
-        self.signal_values = deque(maxlen=max_samples)
-        self.raw_values = deque(maxlen=max_samples)
-        self.hr_times = deque(maxlen=max_samples)
-        self.hr_values = deque(maxlen=max_samples)
+        self.signal_times = deque(maxlen=1000)
+        self.signal_values = deque(maxlen=1000)
+        self.raw_values = deque(maxlen=1000)
+        self.hr_times = deque(maxlen=1000)
+        self.hr_values = deque(maxlen=1000)
         self.fft_freqs = deque(maxlen=512)  # FFT frequency bins
         self.fft_power = deque(maxlen=512)  # FFT power spectrum
-        self.cardiac_cycle_data = deque(maxlen=100)  # Cardiac cycle data
         self.start_time = None
-        
-        # Initialize components in correct order
-        self.setup_plots()
+
+        # Initialize components exactly once
         self.setup_video()
         self.setup_processor()
         self.setup_detector()
         self.init_ui()
-        
-        self.current_rois = None  # Changed to support multiple ROIs
-        self.prev_frame = None
-        self.last_frame_time = None
-        
+
+        self.current_rois = None
+
         # Initialize quality indicator
         self.setup_quality_indicator()
         
@@ -301,10 +293,6 @@ class MainWindow(BaseWindow):
         
         right_layout.addWidget(measurements_widget)
         
-        # Initialize matplotlib figures and canvases
-        import matplotlib.pyplot as plt
-        from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
-        
         # Create signal plot
         plot_dpi = max(80, min(120, int(100 * self.scale_factor)))
         self.signal_figure = plt.figure(figsize=(8, 3), dpi=plot_dpi)
@@ -344,18 +332,6 @@ class MainWindow(BaseWindow):
         right_layout.addWidget(self.hr_canvas)
         right_layout.addWidget(self.fft_canvas)
         
-        # Initialize data storage
-        from collections import deque
-        self.raw_values = deque(maxlen=1000)
-        self.signal_times = deque(maxlen=1000)
-        self.hr_values = deque(maxlen=1000)
-        self.hr_times = deque(maxlen=1000)
-        self.signal_values = deque(maxlen=1000)
-        self.fft_freqs = deque(maxlen=512)
-        self.fft_power = deque(maxlen=512)
-        self.cardiac_cycle_data = deque(maxlen=100)
-        self.start_time = None
-        
         main_layout.addWidget(right_panel)
         
         # Set stretch factors
@@ -364,45 +340,26 @@ class MainWindow(BaseWindow):
         
         # Add the main widget to the content layout
         self.content_layout.addWidget(main_widget)
-        
-        # Set up video capture and processing components
-        self.setup_video()
-        self.setup_processor()
-        self.setup_detector()
-        
-        self.logger.info("Video setup complete")
 
     def setup_video(self):
-        """Initialize video capture and processing components."""
+        """Initialize video capture and the frame/plot update timers."""
         try:
             # Initialize video capture
             self.video_capture = VideoCapture()
             self.logger.info("VideoCapture initialized")
 
-            # Initialize face detector and signal processor
-            self.face_detector = FaceDetector()
-            self.signal_processor = SignalProcessor()
-
             # Set up video timer for frame updates
             self.video_timer = QTimer()
             self.video_timer.timeout.connect(self.update_frame)
-            
+
             # Set up plot timer for less frequent updates
             self.plot_timer = QTimer()
             self.plot_timer.timeout.connect(self.update_plots)
-            
-            # Initialize state variables
+
             self.is_running = False
-            self.current_frame = None
-            self.current_roi = None
-            self.current_bpm = None
-            
-            # Double buffering for smooth display
-            self.display_buffer = None
-            self.buffer_ready = False
-            
+
             self.logger.info("Video setup complete")
-            
+
         except Exception as e:
             self.logger.error(f"Error in video setup: {str(e)}")
             raise
@@ -414,10 +371,6 @@ class MainWindow(BaseWindow):
     def setup_detector(self):
         """Initialize the face detector."""
         self.face_detector = FaceDetector()
-
-    def setup_plots(self):
-        """Set up the signal and heart rate plots."""
-        pass  # Plot setup is now handled in init_ui
 
     def open_video_file(self):
         """Open a video file dialog."""
@@ -527,7 +480,6 @@ class MainWindow(BaseWindow):
                 self.hr_values.clear()
                 self.fft_freqs.clear()
                 self.fft_power.clear()
-                self.cardiac_cycle_data.clear()
                 
                 # Disable reset button when starting new measurement
                 self.reset_button.setEnabled(False)
@@ -551,11 +503,7 @@ class MainWindow(BaseWindow):
                 self.video_capture.stop()
                 self.is_running = False
                 self.start_button.setText("Start")
-                self.current_roi = None
-                self.current_frame = None
-                self.display_buffer = None
-                self.buffer_ready = False
-                
+
                 # Reset all data buffers
                 has_data = len(self.raw_values) > 0
                 self.signal_times.clear()
@@ -565,7 +513,6 @@ class MainWindow(BaseWindow):
                 self.hr_values.clear()
                 self.fft_freqs.clear()
                 self.fft_power.clear()
-                self.cardiac_cycle_data.clear()
                 self.start_time = None
                 
                 # Reset session tracking
@@ -601,8 +548,6 @@ class MainWindow(BaseWindow):
 
     def reset_video_state(self):
         """Reset video processing state."""
-        self.current_roi = None
-        self.prev_frame = None
         self.start_time = None
         
         # Reset all data buffers
@@ -701,9 +646,6 @@ class MainWindow(BaseWindow):
                 self.stop_video_processing()
                 return
 
-            # Store current frame for processing
-            self.current_frame = frame.copy()
-
             # Detect face and get all ROIs (forehead + cheeks)
             landmarks = self.face_detector.detect_face(frame)
             if landmarks is not None:
@@ -790,10 +732,6 @@ class MainWindow(BaseWindow):
                     if fft_freqs is not None and fft_power is not None:
                         self.fft_freqs.extend(fft_freqs)
                         self.fft_power.extend(fft_power)
-                    
-                    # Update method data if available
-                    if method_data:
-                        self.cardiac_cycle_data.append(method_data)
                     
                     # Update frequency display
                     freq = bpm / 60.0

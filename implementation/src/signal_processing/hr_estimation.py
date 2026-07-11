@@ -1,7 +1,5 @@
 import numpy as np
-import time
-from scipy.signal import welch, find_peaks, peak_prominences, butter, filtfilt
-from scipy.stats import entropy
+from scipy.signal import welch, find_peaks
 from collections import deque
 
 class HeartRateEstimator:

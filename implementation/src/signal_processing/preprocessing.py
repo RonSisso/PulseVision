@@ -1,6 +1,5 @@
 import numpy as np
-from scipy.signal import savgol_filter, iirnotch, filtfilt, butter, detrend
-from scipy.stats import zscore
+from scipy.signal import savgol_filter, iirnotch, filtfilt, butter, detrend, welch
 
 class SignalPreprocessor:
     def __init__(self, sampling_rate):
@@ -260,7 +259,6 @@ class SignalPreprocessor:
             
             # 3. Frequency domain quality
             # Check for dominant frequency content in heart rate band
-            from scipy.signal import welch
             freqs, power = welch(signal, fs=self.fs, nperseg=min(256, len(signal)))
             
             hr_mask = (freqs >= self.hr_min_hz) & (freqs <= self.hr_max_hz)

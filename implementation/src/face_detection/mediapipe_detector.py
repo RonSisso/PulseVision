@@ -1,7 +1,6 @@
 import cv2
 import numpy as np
 import mediapipe as mp
-from collections import deque
 import logging
 
 class FaceDetector:
@@ -21,7 +20,6 @@ class FaceDetector:
         self.smooth_forehead_roi = None
         self.smooth_left_cheek_roi = None
         self.smooth_right_cheek_roi = None
-        self.smooth_history = deque(maxlen=5)
 
     def detect_face(self, frame):
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -54,9 +52,8 @@ class FaceDetector:
             face_center_x = (face_x_min + face_x_max) // 2
             forehead_center_y = face_y_min + forehead_height // 2
             
-            # Make the forehead ROI wider than the face for better coverage
-            forehead_width = int(face_width * 0.7)  # 120% of face width
-            forehead_height = int(face_height * 0.26)  # 35% of face height
+            forehead_width = int(face_width * 0.7)  # 70% of face width
+            forehead_height = int(face_height * 0.26)  # 26% of face height
             
             # Center the ROI on the face center
             x_min = max(0, face_center_x - forehead_width // 2)
@@ -76,43 +73,7 @@ class FaceDetector:
             # If landmark access fails, use a fallback approach
             self.logger.warning(f"Landmark access failed: {e}. Using fallback ROI.")
             return self._get_fallback_roi(frame, landmarks)
-        
-        try:
-            # Get coordinates for all forehead landmarks
-            xs = [int(landmarks[i].x * iw) for i in forehead_indices]
-            ys = [int(landmarks[i].y * ih) for i in forehead_indices]
-            
-            # Calculate the center of the forehead landmarks
-            center_x = int(np.mean(xs))
-            center_y = int(np.mean(ys))
-            
-            # Calculate the spread of landmarks
-            x_spread = max(xs) - min(xs)
-            y_spread = max(ys) - min(ys)
-            
-            # Define ROI size based on landmark spread with minimum sizes
-            w = max(int(x_spread * 1.8), 80)  # At least 80 pixels wide
-            h = max(int(y_spread * 1.5), 40)  # At least 40 pixels tall
-            
-            # Center the ROI on the forehead center
-            x_min = max(0, center_x - w // 2)
-            y_min = max(0, center_y - h // 2)
-            x_max = min(iw, x_min + w)
-            y_max = min(ih, y_min + h)
-            
-            # Recalculate final dimensions after bounds checking
-            w = x_max - x_min
-            h = y_max - y_min
-            
-            roi = [x_min, y_min, w, h]
-            self.smooth_forehead_roi = self._smooth_roi(roi, 'forehead')
-            return self.smooth_forehead_roi
-            
-        except (IndexError, ValueError) as e:
-            # If landmark access fails, use a fallback approach
-            self.logger.warning(f"Landmark access failed: {e}. Using fallback ROI.")
-            return self._get_fallback_roi(frame, landmarks)
-    
+
     def _get_fallback_roi(self, frame, landmarks):
         """Fallback method for ROI extraction when landmarks fail."""
         ih, iw, _ = frame.shape
@@ -145,8 +106,8 @@ class FaceDetector:
         h = y_max - y_min
         
         roi = [x_min, y_min, w, h]
-        self.smooth_roi = self._smooth_roi(roi)
-        return self.smooth_roi
+        self.smooth_forehead_roi = self._smooth_roi(roi, 'forehead')
+        return self.smooth_forehead_roi
 
     def _smooth_roi(self, current_roi, roi_type='forehead'):
         """Smooth ROI coordinates to reduce jitter."""
@@ -279,5 +240,4 @@ class FaceDetector:
         self.smooth_forehead_roi = None
         self.smooth_left_cheek_roi = None
         self.smooth_right_cheek_roi = None
-        self.smooth_history.clear()
         self.logger.debug("MediaPipe face detector reset")
