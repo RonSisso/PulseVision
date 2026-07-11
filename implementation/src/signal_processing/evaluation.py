@@ -35,18 +35,23 @@ class SyntheticSignalGenerator:
     """Generate a realistic green-channel trace containing a known pulse.
 
     The trace is centered around a typical 8-bit skin brightness (~128) with a
-    sub-1% pulse amplitude, optional sensor noise, and optional slow baseline
-    drift (simulating gradual lighting change).
+    sub-1% pulse amplitude, optional sensor noise, optional slow baseline
+    drift (simulating gradual lighting change), and optional motion spikes
+    (brief brightness bumps simulating head movement).
     """
 
     def __init__(self, bpm=75, sampling_rate=30, amplitude=1.5, noise_level=0.3,
-                 drift_amplitude=0.0, drift_freq_hz=0.05, mean_level=128.0, seed=None):
+                 drift_amplitude=0.0, drift_freq_hz=0.05,
+                 spike_rate_per_s=0.0, spike_amplitude=8.0,
+                 mean_level=128.0, seed=None):
         self.bpm = bpm
         self.fs = sampling_rate
         self.amplitude = amplitude
         self.noise_level = noise_level
         self.drift_amplitude = drift_amplitude
         self.drift_freq_hz = drift_freq_hz
+        self.spike_rate_per_s = spike_rate_per_s
+        self.spike_amplitude = spike_amplitude
         self.mean_level = mean_level
         self.rng = np.random.default_rng(seed)
 
@@ -58,5 +63,15 @@ class SyntheticSignalGenerator:
         pulse = self.amplitude * np.sin(2 * np.pi * (self.bpm / 60.0) * t)
         noise = self.rng.normal(0, self.noise_level, size=n)
         drift = self.drift_amplitude * np.sin(2 * np.pi * self.drift_freq_hz * t)
+        trace = self.mean_level + pulse + noise + drift
 
-        return self.mean_level + pulse + noise + drift
+        if self.spike_rate_per_s > 0:
+            n_spikes = int(round(duration_sec * self.spike_rate_per_s))
+            samples = np.arange(n)
+            for _ in range(n_spikes):
+                center = self.rng.uniform(0, n)
+                width = self.rng.uniform(2, 6)  # spike std in samples (~0.1-0.2 s)
+                sign = 1.0 if self.rng.random() < 0.5 else -1.0
+                trace += sign * self.spike_amplitude * np.exp(-0.5 * ((samples - center) / width) ** 2)
+
+        return trace

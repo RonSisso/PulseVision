@@ -50,12 +50,16 @@ SYNTHETIC_CONDITIONS = {
     'clean': dict(noise_level=0.3, drift_amplitude=0.0),
     'noisy': dict(noise_level=1.5, drift_amplitude=0.0),
     'drift': dict(noise_level=0.3, drift_amplitude=3.0),
+    'spikes': dict(noise_level=0.8, spike_rate_per_s=0.5, spike_amplitude=8.0),
 }
 
+# Note: append new cases at the end only — each case's RNG seed is derived
+# from its position, so inserting would silently change existing results.
 SYNTHETIC_SUITE = (
     [(bpm, 'clean') for bpm in (45, 60, 72, 90, 120, 150)]
     + [(bpm, 'noisy') for bpm in (45, 60, 72, 90, 120, 150)]
     + [(72, 'drift')]
+    + [(72, 'spikes'), (120, 'spikes')]
 )
 
 

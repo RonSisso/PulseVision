@@ -9,7 +9,7 @@ import logging
 import time
 
 import numpy as np
-from scipy.signal import butter, filtfilt, savgol_filter, welch
+from scipy.signal import welch
 
 from .preprocessing import SignalPreprocessor
 from .hr_estimation import HeartRateEstimator
@@ -173,13 +173,10 @@ class SignalProcessor:
         # Convert combined buffer to numpy array
         signal = np.array(self.combined_buffer)
 
-        # Step 1: Enhanced signal preprocessing pipeline
+        # Clean the combined trace (detrend -> bandpass -> normalize)
         signal = self.preprocessor.enhance_heart_rate_signal(signal)
 
-        # Step 2: Additional PPG signal enhancement
-        signal = self.enhance_ppg_signal(signal)
-
-        # Step 3: Heart rate estimation using FFT method
+        # Heart rate estimation in the frequency domain
         freq_bpm, freq_confidence = self.hr_estimator.estimate(signal)
 
         if freq_bpm is not None and freq_confidence > 0.4:
@@ -356,139 +353,6 @@ class SignalProcessor:
         else:
             # Fallback to simple average if no weights
             return np.mean(list(roi_signals.values()))
-
-    def enhance_ppg_signal(self, signal):
-        """Enhanced PPG signal processing without ICA - more stable approach."""
-        try:
-            # 1. Apply bandpass filter to focus on heart rate frequencies
-            nyquist = self.fs / 2
-            low = 0.8 / nyquist  # 48 BPM
-            high = 3.0 / nyquist  # 180 BPM
-            b, a = butter(4, [low, high], btype='band')
-            filtered = filtfilt(b, a, signal)
-
-            # 2. Apply adaptive smoothing based on signal quality
-            signal_quality = self._assess_signal_quality(filtered)
-            if signal_quality > 0.7:  # High quality signal
-                # Light smoothing
-                smoothed = savgol_filter(filtered, 7, 2)
-            else:  # Lower quality signal
-                # More aggressive smoothing
-                smoothed = savgol_filter(filtered, 11, 3)
-
-            # 3. Remove baseline wander with more robust method
-            window_size = min(30, len(smoothed) // 4)
-            if window_size > 5:
-                baseline = np.convolve(smoothed, np.ones(window_size)/window_size, mode='same')
-                enhanced = smoothed - baseline
-            else:
-                enhanced = smoothed
-
-            # 4. Apply temporal consistency check
-            enhanced = self._apply_temporal_consistency(enhanced)
-
-            print(f"Signal enhancement: quality={signal_quality:.2f}, smoothing={'light' if signal_quality > 0.7 else 'aggressive'}")
-
-            return enhanced
-
-        except Exception as e:
-            self.logger.error(f"Signal enhancement error: {e}")
-            return signal
-
-    def _apply_temporal_consistency(self, signal):
-        """Apply temporal consistency to prevent sudden changes."""
-        try:
-            # Check for sudden amplitude changes
-            diff = np.abs(np.diff(signal))
-            mean_diff = np.mean(diff)
-            std_diff = np.std(diff)
-
-            # If there are sudden large changes, apply additional smoothing
-            if std_diff > 2 * mean_diff:
-                signal = savgol_filter(signal, 9, 2)
-                print("Applied additional smoothing due to temporal inconsistency")
-
-            return signal
-
-        except Exception:
-            return signal
-
-    def _assess_signal_quality(self, signal):
-        """Enhanced assessment of PPG signal quality."""
-        try:
-            # 1. Basic signal statistics
-            signal_std = np.std(signal)
-            signal_mean = np.abs(np.mean(signal))
-
-            # Check for flat or constant signals
-            if signal_std < 1e-6 or signal_mean < 1e-6:
-                return 0.0
-
-            # 2. Calculate signal-to-noise ratio in heart rate band
-            freqs, power = welch(signal, fs=self.fs, nperseg=min(256, len(signal)))
-
-            # Heart rate band power (0.8-3.0 Hz = 48-180 BPM)
-            hr_mask = (freqs >= 0.8) & (freqs <= 3.0)
-            hr_power = np.sum(power[hr_mask])
-            total_power = np.sum(power)
-
-            # 3. Check for dominant frequency content
-            if total_power < 1e-6:
-                return 0.0
-
-            # SNR in heart rate band
-            snr = hr_power / (total_power - hr_power + 1e-6)
-
-            # 4. Temporal consistency check
-            # Check for sudden amplitude changes that might indicate motion artifacts
-            diff_signal = np.abs(np.diff(signal))
-            temporal_consistency = 1.0 / (1.0 + np.std(diff_signal) / (np.mean(diff_signal) + 1e-6))
-
-            # 5. Frequency domain quality
-            # Look for clear peaks in the heart rate band
-            hr_power_spectrum = power[hr_mask]
-
-            if len(hr_power_spectrum) > 0:
-                # Find the dominant peak
-                max_power_idx = np.argmax(hr_power_spectrum)
-                max_power = hr_power_spectrum[max_power_idx]
-                avg_power = np.mean(hr_power_spectrum)
-
-                # Peak prominence (how much the peak stands out)
-                peak_prominence = max_power / (avg_power + 1e-6)
-                frequency_quality = min(peak_prominence / 3.0, 1.0)  # Normalize
-            else:
-                frequency_quality = 0.0
-
-            # 6. Combined quality score with multi-ROI considerations
-            # Weight different quality metrics
-            base_quality = (0.4 * min(snr / 2.0, 1.0) +  # SNR component
-                           0.3 * temporal_consistency +    # Temporal consistency
-                           0.3 * frequency_quality)        # Frequency domain quality
-
-            # Multi-ROI quality boost: if we have multiple ROIs contributing, boost quality
-            roi_contribution_factor = 1.0
-            if hasattr(self, 'roi_weights'):
-                # Count how many ROIs are contributing significantly
-                contributing_rois = sum(1 for weight in self.roi_weights.values() if weight > 0.1)
-                if contributing_rois >= 2:
-                    roi_contribution_factor = 1.1  # 10% boost for multi-ROI
-                elif contributing_rois >= 3:
-                    roi_contribution_factor = 1.2  # 20% boost for all ROIs
-
-            quality = base_quality * roi_contribution_factor
-
-            # Ensure quality is in [0,1] range
-            quality = max(0.0, min(1.0, quality))
-
-            print(f"Signal quality: SNR={snr:.2f}, Temporal={temporal_consistency:.2f}, "
-                  f"Freq={frequency_quality:.2f}, Multi-ROI={roi_contribution_factor:.2f}, Overall={quality:.2f}")
-
-            return quality
-
-        except Exception as e:
-            print(f"Signal quality assessment error: {e}")
-            return 0.0
 
     def reset(self):
         """Reset the signal processor state for a fresh measurement."""
