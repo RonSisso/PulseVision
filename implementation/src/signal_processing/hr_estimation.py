@@ -61,12 +61,18 @@ class HeartRateEstimator:
             return 0.0
 
 
-    def estimate(self, signal):
-        """Simple and robust heart rate estimation based on clean signal analysis."""
+    def estimate(self, signal, fs=None):
+        """Simple and robust heart rate estimation based on clean signal analysis.
+
+        `fs` is the measured sampling rate of `signal` (defaults to nominal).
+        """
         try:
+            if fs is None:
+                fs = self.fs
+
             # 1. Frequency domain analysis with longer window for better resolution
             window_size = min(512, len(signal))
-            freqs, power = welch(signal, fs=self.fs, nperseg=window_size, nfft=2**12)
+            freqs, power = welch(signal, fs=fs, nperseg=window_size, nfft=2**12)
             
             # 2. Focus on heart rate band
             band_mask = (freqs >= self.min_hr_hz) & (freqs <= self.max_hr_hz)

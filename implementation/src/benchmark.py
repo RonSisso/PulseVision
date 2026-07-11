@@ -10,9 +10,9 @@ Usage (from the implementation/ directory):
     python src/benchmark.py --synthetic --json benchmarks/results/my_run.json --label "step3-no-notch"
     python src/benchmark.py --clips benchmarks/clips.json
 
-The processor's wall-clock (init delay, baseline establishment) is replaced
-with a frame-indexed clock, so offline runs reproduce the live app's timing
-behavior deterministically and at full speed.
+Each frame is fed with an explicit timestamp (frame_index / fps), so offline
+runs reproduce the live app's timing behavior (init delay, baseline
+establishment) deterministically and at full speed.
 """
 
 import argparse
@@ -30,7 +30,6 @@ SRC_DIR = os.path.dirname(os.path.abspath(__file__))
 if SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
 
-import signal_processing.processor as processor_module
 from signal_processing.processor import SignalProcessor
 from signal_processing.evaluation import SyntheticSignalGenerator, mae, rmse, bias
 
@@ -63,41 +62,21 @@ SYNTHETIC_SUITE = (
 )
 
 
-class FrameClock:
-    """Frame-indexed stand-in for the `time` module inside the processor."""
-
-    def __init__(self, sampling_rate):
-        self._t = 0.0
-        self._dt = 1.0 / sampling_rate
-
-    def time(self):
-        return self._t
-
-    def tick(self):
-        self._t += self._dt
-
-
 def _run_processor(frame_roi_iter, sampling_rate):
     """Drive a fresh SignalProcessor over (frame, rois) pairs.
 
-    Returns a list of (t_seconds, bpm_or_None, confidence) per frame.
-    The processor's per-frame prints are suppressed to keep output readable.
+    Each frame is stamped with frame_index / sampling_rate. Returns a list of
+    (t_seconds, bpm_or_None, confidence) per frame. The processor's per-frame
+    prints are suppressed to keep output readable.
     """
     sp = SignalProcessor(sampling_rate=sampling_rate)
-    clock = FrameClock(sampling_rate)
-    original_time = processor_module.time
-    processor_module.time = clock
     outputs = []
-    try:
-        sink = io.StringIO()
-        with contextlib.redirect_stdout(sink):
-            for frame, rois in frame_roi_iter:
-                result = sp.process_frame(frame, rois)
-                bpm, confidence = result[0], result[1]
-                outputs.append((clock.time(), bpm, confidence))
-                clock.tick()
-    finally:
-        processor_module.time = original_time
+    sink = io.StringIO()
+    with contextlib.redirect_stdout(sink):
+        for i, (frame, rois) in enumerate(frame_roi_iter):
+            t = i / sampling_rate
+            result = sp.process_frame(frame, rois, timestamp=t)
+            outputs.append((t, result.bpm, result.confidence))
     return outputs
 
 

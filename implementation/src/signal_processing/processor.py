@@ -2,9 +2,15 @@
 
 Combines the green-channel traces from the forehead and cheek ROIs into a
 single signal, cleans it, and estimates heart rate in the frequency domain.
+
+Timing model: every sample carries an explicit timestamp (seconds). The
+actual sampling rate is measured from those timestamps and the samples are
+resampled onto a uniform grid before spectral analysis, so dropped/jittered
+frames or video files with fps != 30 do not skew the estimated heart rate.
 """
 
 from collections import deque
+from dataclasses import dataclass
 import logging
 import time
 
@@ -16,10 +22,25 @@ from .hr_estimation import HeartRateEstimator
 from .filtering import HeartRateFilter, ROIStabilityChecker
 
 
+@dataclass
+class ProcessorResult:
+    """Output of one processing step."""
+    bpm: float | None
+    confidence: float
+    fft_freqs: np.ndarray | None = None
+    fft_power: np.ndarray | None = None
+    method: str = 'none'
+
+
 class SignalProcessor:
+    # Accept measured sampling rates only within this plausible range;
+    # otherwise fall back to the nominal rate.
+    MIN_PLAUSIBLE_FS = 5.0
+    MAX_PLAUSIBLE_FS = 120.0
+
     def __init__(self, sampling_rate=30):
         self.logger = logging.getLogger(__name__)
-        self.fs = sampling_rate
+        self.fs = sampling_rate  # nominal rate; actual rate is measured per buffer
 
         # Multiple ROI buffers for different regions
         self.buffers = {
@@ -28,8 +49,9 @@ class SignalProcessor:
             'right_cheek': deque(maxlen=self.fs * 10)
         }
 
-        # Combined signal buffer
+        # Combined signal buffer and per-sample timestamps (~10 s at nominal rate)
         self.combined_buffer = deque(maxlen=self.fs * 10)
+        self.sample_times = deque(maxlen=self.fs * 10)
 
         self.preprocessor = SignalPreprocessor(sampling_rate)
         self.hr_estimator = HeartRateEstimator(sampling_rate)
@@ -37,9 +59,9 @@ class SignalProcessor:
         self.roi_checker = ROIStabilityChecker()
         self.last_bpm = None
 
-        # Initialization delay to avoid startup noise
-        self.init_delay = 2.0  # 2 seconds delay
-        self.start_time = None
+        # Initialization delay to avoid startup noise (in sample time)
+        self.init_delay = 2.0  # seconds
+        self.start_time = None  # timestamp of the first processed sample
         self.initialized = False
 
         # ROI tracking for automatic reset
@@ -78,42 +100,44 @@ class SignalProcessor:
         self.smoothed_hr = None
         self.smoothing_alpha = 0.3  # How much new measurements influence smoothed HR
 
-    def process_frame(self, frame, roi):
-        """Legacy method for single ROI processing - maintained for backward compatibility."""
+    def process_frame(self, frame, roi, timestamp=None):
+        """Process one frame given a single ROI or a dict of ROIs."""
         if isinstance(roi, dict):
-            # New multi-ROI format
-            return self.process_multiple_rois(frame, roi)
+            return self.process_multiple_rois(frame, roi, timestamp)
         else:
             # Legacy single ROI format - convert to multi-ROI format
-            rois = {'forehead': roi}
-            return self.process_multiple_rois(frame, rois)
+            return self.process_multiple_rois(frame, {'forehead': roi}, timestamp)
 
-    def process_multiple_rois(self, frame, rois):
-        """Process multiple ROIs and combine their signals for heart rate estimation."""
+    def process_multiple_rois(self, frame, rois, timestamp=None):
+        """Process multiple ROIs and combine their signals for heart rate estimation.
+
+        `timestamp` is the sample time in seconds (any consistent origin).
+        When omitted, wall-clock time is used.
+        """
+        if timestamp is None:
+            timestamp = time.time()
+
         # Check for complete failure (no frame or no ROIs at all)
         if frame is None:
             print("Frame is None - resetting signal processor")
             self.reset()
             self.roi_lost = True
-            return None, 0.0
+            return ProcessorResult(None, 0.0)
 
         if rois is None or not any(rois.values()):
             print("All ROIs are None - face left frame, resetting signal processor")
             self.reset()
             self.roi_lost = True
-            return None, 0.0
+            return ProcessorResult(None, 0.0)
 
-        # Initialize start time if not set
+        # Initialize start time from the first sample
         if self.start_time is None:
-            self.start_time = time.time()
+            self.start_time = timestamp
             print(f"Starting initialization delay: {self.init_delay} seconds")
 
-        # Check if initialization delay is complete
-        current_time = time.time()
-        if not self.initialized and (current_time - self.start_time) < self.init_delay:
-            remaining = self.init_delay - (current_time - self.start_time)
-            print(f"Initialization delay: {remaining:.1f}s remaining")
-            return None, 0.0
+        # Check if initialization delay is complete (in sample time)
+        if not self.initialized and (timestamp - self.start_time) < self.init_delay:
+            return ProcessorResult(None, 0.0)
         elif not self.initialized:
             self.initialized = True
             print("Initialization complete - starting heart rate measurement")
@@ -154,7 +178,7 @@ class SignalProcessor:
 
         if valid_rois == 0:
             print("No valid ROIs found - returning last valid measurement")
-            return self.last_bpm, 0.0, None, None, {}
+            return ProcessorResult(self.last_bpm, 0.0)
 
         # Combine signals from all valid ROIs
         combined_signal = self._combine_roi_signals(roi_signals)
@@ -166,18 +190,19 @@ class SignalProcessor:
             combined_signal = 0.7 * last_signal + 0.3 * combined_signal
 
         self.combined_buffer.append(combined_signal)
+        self.sample_times.append(timestamp)
 
         if len(self.combined_buffer) < self.fs * 2:
-            return None, 0.0
+            return ProcessorResult(None, 0.0)
 
-        # Convert combined buffer to numpy array
-        signal = np.array(self.combined_buffer)
+        # Measure the actual sampling rate and resample onto a uniform grid
+        signal, actual_fs = self._uniform_signal()
 
-        # Clean the combined trace (detrend -> bandpass -> normalize)
-        signal = self.preprocessor.enhance_heart_rate_signal(signal)
+        # Clean the trace (detrend -> bandpass -> normalize)
+        signal = self.preprocessor.enhance_heart_rate_signal(signal, fs=actual_fs)
 
         # Heart rate estimation in the frequency domain
-        freq_bpm, freq_confidence = self.hr_estimator.estimate(signal)
+        freq_bpm, freq_confidence = self.hr_estimator.estimate(signal, fs=actual_fs)
 
         if freq_bpm is not None and freq_confidence > 0.4:
             bpm, confidence = freq_bpm, freq_confidence
@@ -189,10 +214,9 @@ class SignalProcessor:
             method_used = "none"
             print("FFT heart rate estimation failed")
 
-        # Step 4: Enhanced confidence validation
+        # Confidence validation
         if bpm is not None and confidence is not None:
-            # Additional confidence checks - using FFT method only
-            min_confidence_threshold = 0.4  # Threshold for FFT method
+            min_confidence_threshold = 0.4
 
             # Check for physiologically reasonable values
             if not (40 <= bpm <= 180):
@@ -215,11 +239,9 @@ class SignalProcessor:
                     bpm = None
                     confidence = 0.0
 
-        # Step 5: Baseline-based heart rate calculation
+        # Baseline-based heart rate calculation (baseline timing in sample time)
         if bpm is not None:
-            # Check if we should establish baseline
-            current_time = time.time()
-            time_since_start = current_time - self.start_time if self.start_time else 0
+            time_since_start = timestamp - self.start_time if self.start_time else 0
 
             if not self.baseline_established and time_since_start >= self.baseline_time:
                 # Establish baseline after 20 seconds
@@ -229,7 +251,6 @@ class SignalProcessor:
                 print(f"Baseline HR established: {bpm:.1f} BPM")
 
             if self.baseline_established:
-                # Use baseline-based calculation
                 # Gradually update baseline with new measurements
                 self.baseline_hr = (1 - self.baseline_alpha) * self.baseline_hr + self.baseline_alpha * bpm
 
@@ -268,7 +289,7 @@ class SignalProcessor:
         if len(signal) >= 64:  # Need minimum samples for meaningful FFT
             try:
                 window_size = min(512, len(signal))
-                fft_freqs, fft_power = welch(signal, fs=self.fs, nperseg=window_size, nfft=2**10)
+                fft_freqs, fft_power = welch(signal, fs=actual_fs, nperseg=window_size, nfft=2**10)
 
                 # Focus on heart rate frequency range (0.5-3 Hz)
                 hr_mask = (fft_freqs >= 0.5) & (fft_freqs <= 3.0)
@@ -278,9 +299,31 @@ class SignalProcessor:
                 print(f"FFT calculation error: {e}")
                 fft_freqs, fft_power = None, None
 
-        method_data = {'method_used': method_used}
+        return ProcessorResult(filtered_bpm, confidence, fft_freqs, fft_power, method_used)
 
-        return filtered_bpm, confidence, fft_freqs, fft_power, method_data
+    def _uniform_signal(self):
+        """Resample the buffered samples onto a uniform time grid.
+
+        Returns (signal, actual_fs). Uses the mean sampling rate measured from
+        the timestamps; falls back to the nominal rate if the measurement is
+        implausible (e.g. duplicate timestamps).
+        """
+        t = np.asarray(self.sample_times, dtype=float)
+        v = np.asarray(self.combined_buffer, dtype=float)
+
+        span = t[-1] - t[0]
+        if span <= 0:
+            return v, float(self.fs)
+
+        actual_fs = (len(t) - 1) / span
+        if not (self.MIN_PLAUSIBLE_FS <= actual_fs <= self.MAX_PLAUSIBLE_FS):
+            self.logger.warning(
+                "Implausible measured sampling rate %.1f Hz; using nominal %d Hz",
+                actual_fs, self.fs)
+            return v, float(self.fs)
+
+        uniform_t = np.linspace(t[0], t[-1], len(t))
+        return np.interp(uniform_t, t, v), float(actual_fs)
 
     def _update_roi_health(self, roi_name, is_stable):
         """Update ROI health based on stability."""
@@ -324,14 +367,6 @@ class SignalProcessor:
                 weights_changed = True
                 break
 
-        # Print weight changes for debugging
-        weight_changes = []
-        for roi_name in self.roi_weights:
-            health = self.roi_health[roi_name]
-            weight = self.roi_weights[roi_name]
-            weight_changes.append(f"{roi_name}: {weight:.2f} (health: {health:.2f})")
-        print(f"ROI weights: {', '.join(weight_changes)}")
-
         return weights_changed
 
     def _combine_roi_signals(self, roi_signals):
@@ -360,6 +395,7 @@ class SignalProcessor:
         for buffer in self.buffers.values():
             buffer.clear()
         self.combined_buffer.clear()
+        self.sample_times.clear()
 
         self.last_bpm = None
         self.start_time = None

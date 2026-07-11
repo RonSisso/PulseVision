@@ -47,6 +47,8 @@ read from the file and used as the pipeline sampling rate.
 - **Cover** — fraction of frames in that window with a valid BPM output.
 - **First** — seconds until the first valid reading.
 
-The processor's wall-clock timing (2 s init delay, 20 s baseline) is driven by
-a frame-indexed clock, so runs are deterministic and faster than real time
-while behaving exactly like the live app.
+The processor consumes explicit per-sample timestamps (frame_index / fps), so
+its timing behavior (2 s init delay, 20 s baseline) is deterministic and runs
+faster than real time while behaving exactly like the live app. The processor
+also measures the true sampling rate from those timestamps, so clips with any
+frame rate are evaluated correctly.

@@ -13,12 +13,16 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 
 from .base_window import BaseWindow
-from signal_processing.processor import SignalProcessor
-from face_detection.mediapipe_detector import FaceDetector
-from video.capture import VideoCapture
+from .processing_worker import ProcessingWorker
+from database.db import Database
 
 
 class MainWindow(BaseWindow):
+    # Interval between plot redraws (matplotlib full redraws are expensive)
+    PLOT_INTERVAL_MS = 250
+    # Minimum seconds between instantaneous-measurement database writes
+    DB_WRITE_INTERVAL_S = 1.0
+
     def __init__(self):
         # Initialize with back button but no power off button
         super().__init__(show_back_button=True, show_power_off=False)
@@ -36,31 +40,29 @@ class MainWindow(BaseWindow):
         # Set up logging
         self.logger = logging.getLogger(__name__)
 
+        # Shared database connection (used from the GUI thread only)
+        self.db = Database()
+
         # Data buffers for plotting
         self.signal_times = deque(maxlen=1000)
         self.signal_values = deque(maxlen=1000)
         self.raw_values = deque(maxlen=1000)
         self.hr_times = deque(maxlen=1000)
         self.hr_values = deque(maxlen=1000)
-        self.fft_freqs = deque(maxlen=512)  # FFT frequency bins
-        self.fft_power = deque(maxlen=512)  # FFT power spectrum
-        self.start_time = None
+        self.latest_fft = None  # (freqs, power) of the most recent spectrum
 
         # Initialize components exactly once
         self.setup_video()
-        self.setup_processor()
-        self.setup_detector()
         self.init_ui()
-
-        self.current_rois = None
 
         # Initialize quality indicator
         self.setup_quality_indicator()
-        
+
         # Measurement session tracking for average calculation
         self.session_hr_values = []  # Store HR values for current session
         self.session_start_time = None  # When current session started
         self.session_measurement_started = False  # Whether we have valid HR data
+        self._last_db_write = 0.0
 
     def init_ui(self):
         """Initialize the user interface."""
@@ -342,35 +344,15 @@ class MainWindow(BaseWindow):
         self.content_layout.addWidget(main_widget)
 
     def setup_video(self):
-        """Initialize video capture and the frame/plot update timers."""
-        try:
-            # Initialize video capture
-            self.video_capture = VideoCapture()
-            self.logger.info("VideoCapture initialized")
+        """Initialize the measurement worker slot and the plot refresh timer."""
+        # The worker (created per measurement run) owns capture, face
+        # detection, and signal processing; the GUI thread only renders.
+        self.worker = None
 
-            # Set up video timer for frame updates
-            self.video_timer = QTimer()
-            self.video_timer.timeout.connect(self.update_frame)
+        self.plot_timer = QTimer()
+        self.plot_timer.timeout.connect(self.update_plots)
 
-            # Set up plot timer for less frequent updates
-            self.plot_timer = QTimer()
-            self.plot_timer.timeout.connect(self.update_plots)
-
-            self.is_running = False
-
-            self.logger.info("Video setup complete")
-
-        except Exception as e:
-            self.logger.error(f"Error in video setup: {str(e)}")
-            raise
-
-    def setup_processor(self):
-        """Initialize the signal processor."""
-        self.signal_processor = SignalProcessor()
-
-    def setup_detector(self):
-        """Initialize the face detector."""
-        self.face_detector = FaceDetector()
+        self.is_running = False
 
     def open_video_file(self):
         """Open a video file dialog."""
@@ -441,115 +423,114 @@ class MainWindow(BaseWindow):
             self.stop_video_processing()
 
     def start_video_processing(self):
-        """Start video capture and processing."""
+        """Start the background measurement worker."""
         try:
-            if not self.is_running:
-                # Check if a patient is selected
-                patient_id = self.get_selected_patient_id()
-                if not patient_id:
-                    QMessageBox.warning(self, "Patient Required", "Please select a patient before starting the measurement.")
-                    return
-                
-                # Get selected input type
-                input_type = self.video_combo.currentText()
-                source = 0 if input_type == "Camera" else self.video_file
-                
-                # Try to start video capture
-                if not self.video_capture.start(source):
-                    error_msg = "Failed to open webcam" if input_type == "Camera" else f"Failed to open video file: {self.video_file}"
-                    QMessageBox.warning(self, "Error", error_msg)
-                    self.reset_video_state()
-                    return
-                
-                # Start video processing
-                self.video_timer.start(33)  # ~30 FPS
-                self.plot_timer.start(100)  # Update plots every 100ms
-                self.is_running = True
-                self.start_button.setText("Stop")
-                self.start_time = time.time()
-                
-                # Initialize measurement session tracking
-                self.session_hr_values.clear()
-                self.session_start_time = time.time()
-                self.session_measurement_started = False
-                
-                # Reset data buffers for new measurement
-                self.signal_times.clear()
-                self.signal_values.clear()
-                self.hr_times.clear()
-                self.hr_values.clear()
-                self.fft_freqs.clear()
-                self.fft_power.clear()
-                
-                # Disable reset button when starting new measurement
-                self.reset_button.setEnabled(False)
-                
-                self.logger.info("Video processing started successfully")
-                
+            if self.is_running:
+                return
+
+            # Check if a patient is selected
+            patient_id = self.get_selected_patient_id()
+            if not patient_id:
+                QMessageBox.warning(self, "Patient Required", "Please select a patient before starting the measurement.")
+                return
+
+            # Get selected input type
+            input_type = self.video_combo.currentText()
+            source = 0 if input_type == "Camera" else self.video_file
+
+            # The worker owns capture/detector/processor and runs off the GUI thread
+            self.worker = ProcessingWorker(source)
+            self.worker.frame_ready.connect(self.on_frame_ready)
+            self.worker.update_ready.connect(self.on_measurement_update)
+            self.worker.stopped.connect(self.on_worker_stopped)
+            self.worker.start()
+
+            self.plot_timer.start(self.PLOT_INTERVAL_MS)
+            self.is_running = True
+            self.start_button.setText("Stop")
+
+            # Initialize measurement session tracking
+            self.session_hr_values.clear()
+            self.session_start_time = time.time()
+            self.session_measurement_started = False
+            self._last_db_write = 0.0
+
+            # Reset data buffers for new measurement
+            self.signal_times.clear()
+            self.signal_values.clear()
+            self.hr_times.clear()
+            self.hr_values.clear()
+            self.latest_fft = None
+
+            # Disable reset button when starting new measurement
+            self.reset_button.setEnabled(False)
+
+            self.logger.info("Video processing started successfully")
+
         except Exception as e:
             self.logger.error(f"Error starting video processing: {str(e)}")
             QMessageBox.critical(self, "Error", f"Failed to start video processing: {str(e)}")
             self.reset_video_state()
 
     def stop_video_processing(self):
-        """Stop video capture and processing."""
+        """Stop the measurement worker and reset the UI."""
         try:
-            if self.is_running:
-                # Calculate and save session average before stopping
-                self.calculate_and_save_session_average()
-                
-                self.video_timer.stop()
-                self.plot_timer.stop()
-                self.video_capture.stop()
-                self.is_running = False
-                self.start_button.setText("Start")
+            if not self.is_running:
+                return
 
-                # Reset all data buffers
-                has_data = len(self.raw_values) > 0
-                self.signal_times.clear()
-                self.signal_values.clear()
-                self.raw_values.clear()
-                self.hr_times.clear()
-                self.hr_values.clear()
-                self.fft_freqs.clear()
-                self.fft_power.clear()
-                self.start_time = None
-                
-                # Reset session tracking
-                self.session_hr_values.clear()
-                self.session_start_time = None
-                self.session_measurement_started = False
-                
-                # Reset signal processor for fresh measurement
-                if hasattr(self, 'signal_processor'):
-                    self.signal_processor.reset()
-                
-                # Reset face detector for fresh measurement
-                if hasattr(self, 'face_detector'):
-                    self.face_detector.reset()
-                
-                # Reset display values
-                self.heart_rate_value.setText('-- BPM')
-                self.freq_value.setText('-- Hz')
-                self.method_value.setText('--')
-                
-                # Reset heart rate container to default styling
-                self.reset_hr_container_style()
-                
-                # Enable reset button if we had data before clearing
-                if has_data:
-                    self.reset_button.setEnabled(True)
-                else:
-                    self.reset_button.setEnabled(False)
-                
-                self.logger.info("Video processing stopped and data reset")
+            # Calculate and save session average before clearing session data
+            self.calculate_and_save_session_average()
+
+            self.is_running = False
+
+            # Stop the worker (it owns capture/detector/processor)
+            if self.worker is not None:
+                self.worker.request_stop()
+                if not self.worker.wait(3000):
+                    self.logger.warning("Processing worker did not stop within 3s")
+                self.worker = None
+
+            self.plot_timer.stop()
+            self.start_button.setText("Start")
+
+            # Reset all data buffers
+            has_data = len(self.raw_values) > 0
+            self.signal_times.clear()
+            self.signal_values.clear()
+            self.raw_values.clear()
+            self.hr_times.clear()
+            self.hr_values.clear()
+            self.latest_fft = None
+
+            # Reset session tracking
+            self.session_hr_values.clear()
+            self.session_start_time = None
+            self.session_measurement_started = False
+
+            # Reset display values
+            self.heart_rate_value.setText('-- BPM')
+            self.freq_value.setText('-- Hz')
+            self.method_value.setText('--')
+
+            # Reset heart rate container to default styling
+            self.reset_hr_container_style()
+
+            # Enable reset button if we had data before clearing
+            self.reset_button.setEnabled(has_data)
+
+            self.logger.info("Video processing stopped and data reset")
         except Exception as e:
             self.logger.error(f"Error stopping video processing: {str(e)}")
 
+    def on_worker_stopped(self, reason):
+        """Handle the worker finishing on its own (end of video / error)."""
+        if reason.startswith('error') and self.is_running:
+            QMessageBox.warning(self, "Measurement stopped", f"Video processing stopped: {reason}")
+        if self.is_running:
+            self.stop_video_processing()
+
     def reset_video_state(self):
         """Reset video processing state."""
-        self.start_time = None
-        
         # Reset all data buffers
         has_data = len(self.raw_values) > 0
         self.signal_times.clear()
@@ -557,22 +538,13 @@ class MainWindow(BaseWindow):
         self.raw_values.clear()
         self.hr_times.clear()
         self.hr_values.clear()
-        self.fft_freqs.clear()
-        self.fft_power.clear()
-        
+        self.latest_fft = None
+
         # Reset session tracking
         self.session_hr_values.clear()
         self.session_start_time = None
         self.session_measurement_started = False
-        
-        # Reset signal processor for fresh measurement
-        if hasattr(self, 'signal_processor'):
-            self.signal_processor.reset()
-        
-        # Reset face detector for fresh measurement
-        if hasattr(self, 'face_detector'):
-            self.face_detector.reset()
-        
+
         # Reset display values
         self.heart_rate_value.setText('-- BPM')
         self.freq_value.setText('-- Hz')
@@ -633,150 +605,57 @@ class MainWindow(BaseWindow):
         """)
         self.quality_indicator.setText(text)
 
-    def update_frame(self):
-        """Update video frame and process for heart rate."""
+    def on_frame_ready(self, frame):
+        """Display an annotated frame emitted by the worker."""
+        if self.is_running:
+            self.display_frame(frame)
+
+    def on_measurement_update(self, update):
+        """Handle one measurement update emitted by the worker."""
         try:
             if not self.is_running:
                 return
 
-            # Read frame
-            frame = self.video_capture.read_frame()
-            if frame is None:
-                self.logger.warning("Failed to read frame")
-                self.stop_video_processing()
-                return
-
-            # Detect face and get all ROIs (forehead + cheeks)
-            landmarks = self.face_detector.detect_face(frame)
-            if landmarks is not None:
-                self.current_rois = self.face_detector.get_all_rois(frame, landmarks)
-            else:
-                self.current_rois = None
-
-            # Process frame in background
-            self.process_frame(frame)
-            
-            # Display the processed frame
-            self.display_frame(frame)
-            
-        except Exception as e:
-            self.logger.error(f"Error in frame update: {str(e)}")
-
-    def process_frame(self, frame):
-        """Process a single frame of video."""
-        try:
-            if frame is None:
-                return
-            
-            # Get current time relative to start
-            if self.start_time is None:
-                self.start_time = time.time()
-            current_time = time.time() - self.start_time
-            
-            # Always call signal processor to check for ROI loss
-            # Check if ROI was lost and clear displays
-            if self.signal_processor.was_roi_lost():
-                print("Clearing displays due to ROI loss")
+            # Face was lost: clear displays but keep plot history
+            if update.roi_lost:
                 self.heart_rate_value.setText("-- BPM")
                 self.freq_value.setText("-- Hz")
                 self.method_value.setText("--")
-                # Reset heart rate container to default styling
                 self.reset_hr_container_style()
-                # Don't clear plot data - keep history for graphs
-            
-            # Process frame if we have valid ROIs
-            if self.current_rois is not None and any(self.current_rois.values()):
-                # Show measuring status
-                self.update_hr_status_message("Measuring...", "#4A90E2")
-                
-                # Calculate combined green channel mean from all ROIs
-                total_green_mean = 0.0
-                valid_rois = 0
-                
-                for roi_name, roi in self.current_rois.items():
-                    if roi is not None:
-                        x, y, w, h = roi
-                        roi_frame = frame[y:y+h, x:x+w]
-                        green_mean = np.mean(roi_frame[:, :, 1])
-                        total_green_mean += green_mean
-                        valid_rois += 1
-                
-                if valid_rois > 0:
-                    combined_green_mean = total_green_mean / valid_rois
-                    
-                    # Store raw value
-                    self.raw_values.append(combined_green_mean)
-                    self.signal_times.append(current_time)
-                    
-                    # Enable reset button only when stopped and we have data
-                    if not self.is_running and len(self.raw_values) > 0 and not self.reset_button.isEnabled():
-                        self.reset_button.setEnabled(True)
-                
-                # Process signal to get heart rate using all ROIs
-                result = self.signal_processor.process_frame(frame, self.current_rois)
-                if len(result) == 5:
-                    bpm, confidence, fft_freqs, fft_power, method_data = result
-                elif len(result) == 4:
-                    bpm, confidence, fft_freqs, fft_power = result
-                    method_data = {}
-                else:
-                    bpm, confidence = result
-                    fft_freqs, fft_power = None, None
-                    method_data = {}
-                
-                if bpm is not None:
-                    # Update heart rate display and save to database
-                    self.update_hr_display(bpm)
-                    
-                    # Update FFT data if available
-                    if fft_freqs is not None and fft_power is not None:
-                        self.fft_freqs.extend(fft_freqs)
-                        self.fft_power.extend(fft_power)
-                    
-                    # Update frequency display
-                    freq = bpm / 60.0
-                    self.freq_value.setText(f"{freq:.2f} Hz")
-                    
-                    # Update method display (always FFT now)
-                    if method_data and 'method_used' in method_data:
-                        method = method_data['method_used']
-                        if method == 'frequency_domain':
-                            self.method_value.setText('FFT')
-                            self.method_value.setStyleSheet('font-weight: bold; color: #2E7D32;')  # Green for FFT
-                        else:
-                            self.method_value.setText('FFT')
-                            self.method_value.setStyleSheet('font-weight: bold; color: #FF9800;')  # Orange for failed
-                    else:
-                        self.method_value.setText('FFT')
-                        self.method_value.setStyleSheet('font-weight: bold; color: #2E7D32;')  # Default to FFT
-                
-                # Draw all ROIs on frame with different colors
-                colors = {
-                    'forehead': (0, 255, 0),    # Green
-                    'left_cheek': (255, 0, 0),  # Blue
-                    'right_cheek': (0, 0, 255)  # Red
-                }
-                
-                for roi_name, roi in self.current_rois.items():
-                    if roi is not None:
-                        x, y, w, h = roi
-                        color = colors.get(roi_name, (0, 255, 0))
-                        cv2.rectangle(frame, (x, y), (x + w, y + h), color, 2)
-                        # Add label
-                        cv2.putText(frame, roi_name.replace('_', ' ').title(), 
-                                  (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
-            else:
-                # No ROIs detected - show ROI not found message
+
+            if not update.roi_found:
                 self.update_hr_status_message("ROI Not Found", "#666")
-                # Call signal processor with None ROIs to trigger reset
-                self.signal_processor.process_frame(frame, None)
-            
-            # Update plots
-            if len(self.raw_values) > 0:
-                self.update_plots()
-            
+                return
+
+            self.update_hr_status_message("Measuring...", "#4A90E2")
+
+            # Raw signal plot data
+            if update.raw_value is not None:
+                self.raw_values.append(update.raw_value)
+                self.signal_times.append(update.t)
+
+            if update.bpm is not None:
+                # Update heart rate display and save to database
+                self.update_hr_display(update.bpm, update.t)
+
+                # Keep the latest FFT spectrum for the plot
+                if update.fft_freqs is not None and update.fft_power is not None:
+                    self.latest_fft = (update.fft_freqs, update.fft_power)
+
+                # Update frequency display
+                freq = update.bpm / 60.0
+                self.freq_value.setText(f"{freq:.2f} Hz")
+
+                # Update method display
+                if update.method == 'frequency_domain':
+                    self.method_value.setText('FFT')
+                    self.method_value.setStyleSheet('font-weight: bold; color: #2E7D32;')  # Green for FFT
+                else:
+                    self.method_value.setText('FFT')
+                    self.method_value.setStyleSheet('font-weight: bold; color: #FF9800;')  # Orange for failed
+
         except Exception as e:
-            self.logger.error(f"Error processing frame: {str(e)}")
+            self.logger.error(f"Error handling measurement update: {str(e)}")
 
     def display_frame(self, frame):
         """Display the frame in the video label with proper aspect ratio handling."""
@@ -834,36 +713,31 @@ class MainWindow(BaseWindow):
         except Exception as e:
             self.logger.error(f"Error displaying frame: {str(e)}")
 
-    def update_hr_display(self, bpm):
-        """Update heart rate display and save to database if patient is selected."""
+    def update_hr_display(self, bpm, t):
+        """Update heart rate display and save to database if patient is selected.
+
+        `t` is the sample time in seconds since measurement start.
+        """
         try:
             self.heart_rate_value.setText(f"{bpm:.1f} BPM")
-            
+
             # Update heart rate container styling based on BPM value
             self.update_hr_container_style(bpm)
-            
+
             # Track heart rate for session average calculation
             if not self.session_measurement_started:
                 self.session_measurement_started = True
                 self.logger.info("Heart rate measurement started for session average")
-            
+
             self.session_hr_values.append(bpm)
-            
-            # Update plot data with relative time
-            if self.start_time is None:
-                self.start_time = time.time()
-            current_time = time.time() - self.start_time
-            
-            self.hr_times.append(current_time)
+
+            self.hr_times.append(t)
             self.hr_values.append(bpm)
-            
-            # Save measurement to database if a patient is selected
+
+            # Save measurement to database (throttled) if a patient is selected
             patient_id = self.get_selected_patient_id()
-            if patient_id:
+            if patient_id and (time.time() - self._last_db_write) >= self.DB_WRITE_INTERVAL_S:
                 try:
-                    from database.db import Database
-                    db = Database()
-                    
                     # Determine status based on heart rate value
                     if 60 <= bpm <= 100:
                         status = "Normal"
@@ -871,16 +745,15 @@ class MainWindow(BaseWindow):
                         status = "Bradycardia"
                     else:
                         status = "Tachycardia"
-                    
-                    # Save measurement to database
-                    if db.add_measurement(patient_id, int(bpm), status):
-                        self.logger.info(f"Saved measurement for patient {patient_id}: {bpm:.1f} BPM ({status})")
+
+                    if self.db.add_measurement(patient_id, int(bpm), status):
+                        self._last_db_write = time.time()
                     else:
                         self.logger.warning(f"Failed to save measurement for patient {patient_id}")
-                        
+
                 except Exception as db_error:
                     self.logger.error(f"Database error saving measurement: {str(db_error)}")
-            
+
         except Exception as e:
             self.logger.error("Error updating HR display: %s", str(e))
 
@@ -1023,10 +896,6 @@ class MainWindow(BaseWindow):
                 self.logger.warning("No patient selected for session average")
                 return
             
-            # Save measurement session to database
-            from database.db import Database
-            db = Database()
-            
             # Get current date and time
             from datetime import datetime
             current_datetime = datetime.now()
@@ -1040,7 +909,7 @@ class MainWindow(BaseWindow):
                 status = "Tachycardia"
             
             # Save session measurement
-            success = db.add_measurement_session(
+            success = self.db.add_measurement_session(
                 patient_id=patient_id,
                 avg_heart_rate=round(avg_hr, 1),
                 status=status,
@@ -1123,12 +992,10 @@ class MainWindow(BaseWindow):
                 # Add grid
                 self.hr_ax.grid(True, alpha=0.3)
             
-            # Plot FFT if we have data
-            if len(self.fft_freqs) > 0 and len(self.fft_power) > 0:
-                # Convert lists to numpy arrays
-                fft_freqs = np.array(list(self.fft_freqs))
-                fft_power = np.array(list(self.fft_power))
-                
+            # Plot the most recent FFT spectrum if we have one
+            if self.latest_fft is not None:
+                fft_freqs, fft_power = self.latest_fft
+
                 # Plot the FFT power spectrum
                 self.fft_ax.plot(fft_freqs, fft_power, 'b-', linewidth=1)
                 
@@ -1152,11 +1019,6 @@ class MainWindow(BaseWindow):
                 self.fft_ax.axvline(x=1.2, color='g', linestyle='--', alpha=0.5, label='72 BPM')
                 self.fft_ax.axvline(x=1.5, color='orange', linestyle='--', alpha=0.5, label='90 BPM')
             
-            # Adjust layout to prevent overlapping
-            self.signal_figure.tight_layout()
-            self.hr_figure.tight_layout()
-            self.fft_figure.tight_layout()
-            
             # Redraw all canvases
             self.signal_canvas.draw()
             self.hr_canvas.draw()
@@ -1173,21 +1035,13 @@ class MainWindow(BaseWindow):
         self.hr_values.clear()
         self.hr_times.clear()
         self.signal_values.clear()
-        self.start_time = None
-        
+        self.latest_fft = None
+
         # Reset session tracking
         self.session_hr_values.clear()
         self.session_start_time = None
         self.session_measurement_started = False
-        
-        # Reset signal processor for fresh measurement
-        if hasattr(self, 'signal_processor'):
-            self.signal_processor.reset()
-        
-        # Reset face detector for fresh measurement
-        if hasattr(self, 'face_detector'):
-            self.face_detector.reset()
-        
+
         # Clear plots
         if hasattr(self, 'signal_ax') and self.signal_ax:
             self.signal_ax.clear()
@@ -1212,21 +1066,18 @@ class MainWindow(BaseWindow):
     def load_patients(self):
         """Load patients from database and populate the combo box."""
         try:
-            from database.db import Database
-            db = Database()
-            
             # Get current user role to filter patients if needed
             user_role = getattr(self, 'user_role', None)
-            
+
             # Get patients from database
             if user_role == 'Administrator':
                 # Administrators can see all patients
-                patients = db.get_all_patients()
+                patients = self.db.get_all_patients()
             else:
                 # Other users see only their assigned patients
                 # For now, we'll show all patients since we don't have the current username
                 # In a real implementation, you'd pass the username from login
-                patients = db.get_all_patients()
+                patients = self.db.get_all_patients()
             
             # Temporarily disconnect the signal to prevent triggering on_patient_selected during loading
             self.patient_combo.currentIndexChanged.disconnect()
@@ -1273,9 +1124,7 @@ class MainWindow(BaseWindow):
         patient_id = self.get_selected_patient_id()
         if patient_id:
             try:
-                from database.db import Database
-                db = Database()
-                patient = db.get_patient(patient_id)
+                patient = self.db.get_patient(patient_id)
                 if patient:
                     display_text = f"{patient['firstName']} {patient['lastName']} (ID: {patient['id']})"
                     self.patient_info_value.setText(display_text)

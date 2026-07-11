@@ -26,14 +26,19 @@ class SignalPreprocessor:
     FILTER_ORDER = 3
     OUTLIER_CLIP_MAD = 5.0  # clip normalized samples beyond +/- 5 MAD units
 
+    # Redesign the filter when the measured sampling rate deviates from the
+    # rate the current coefficients were designed for by more than this.
+    FS_REDESIGN_TOLERANCE = 0.02
+
     def __init__(self, sampling_rate):
         self.fs = sampling_rate
-        self.b_bandpass, self.a_bandpass = self._design_bandpass()
+        self.design_fs = float(sampling_rate)
+        self.b_bandpass, self.a_bandpass = self._design_bandpass(self.design_fs)
 
-    def _design_bandpass(self):
+    def _design_bandpass(self, fs):
         """Design the Butterworth bandpass; returns (None, None) on failure."""
         try:
-            nyquist = 0.5 * self.fs
+            nyquist = 0.5 * fs
             low = self.BAND_LOW_HZ / nyquist
             high = min(self.BAND_HIGH_HZ / nyquist, 0.99)
             return butter(self.FILTER_ORDER, [low, high], btype='band')
@@ -41,9 +46,17 @@ class SignalPreprocessor:
             print(f"Bandpass filter setup error: {e}")
             return None, None
 
-    def enhance_heart_rate_signal(self, signal):
-        """Clean the raw green-channel trace: detrend -> bandpass -> normalize."""
+    def enhance_heart_rate_signal(self, signal, fs=None):
+        """Clean the raw green-channel trace: detrend -> bandpass -> normalize.
+
+        `fs` is the measured sampling rate of `signal`; the bandpass is
+        redesigned when it drifts from the rate the coefficients assume.
+        """
         try:
+            if fs is not None and abs(fs - self.design_fs) / self.design_fs > self.FS_REDESIGN_TOLERANCE:
+                self.design_fs = float(fs)
+                self.b_bandpass, self.a_bandpass = self._design_bandpass(self.design_fs)
+
             enhanced = detrend(signal)
             if self.b_bandpass is not None:
                 enhanced = filtfilt(self.b_bandpass, self.a_bandpass, enhanced)
