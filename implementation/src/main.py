@@ -1,23 +1,39 @@
 import sys
+import os
 import logging
 from pathlib import Path
-from PyQt5.QtWidgets import QApplication
 
+# ------------------------------------------------------------------
+# FIX: Ensure Qt can find its platform plugins (qwindows.dll on Windows)
+# MUST be done BEFORE importing QApplication
+# ------------------------------------------------------------------
+try:
+    from PyQt5.QtCore import QLibraryInfo
+    os.environ.setdefault(
+        "QT_QPA_PLATFORM_PLUGIN_PATH",
+        QLibraryInfo.location(QLibraryInfo.PluginsPath)
+    )
+except Exception:
+    pass
+
+from PyQt5.QtWidgets import QApplication
 from gui.login_window import LoginWindow
+
 
 def setup_logging():
     """Set up logging configuration."""
     log_dir = Path(__file__).parent / 'logs'
     log_dir.mkdir(exist_ok=True)
-    
+
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         handlers=[
-            logging.FileHandler(log_dir / 'app.log'),
+            logging.FileHandler(log_dir / 'app.log', encoding='utf-8'),
             logging.StreamHandler()
         ]
     )
+
 
 def main():
     """Main entry point of the application."""
@@ -25,20 +41,21 @@ def main():
         # Set up logging
         setup_logging()
         logging.info("Starting PulseVision application")
-        
+
         # Create Qt application
         app = QApplication(sys.argv)
-        
+
         # Create and show login window
         window = LoginWindow()
         window.show()
-        
+
         # Start Qt event loop
         sys.exit(app.exec_())
-        
+
     except Exception as e:
-        logging.error(f"Application failed to start: {str(e)}")
+        logging.exception("Application failed to start")
         sys.exit(1)
 
+
 if __name__ == '__main__':
-    main() 
+    main()
