@@ -43,6 +43,8 @@ class SyntheticSignalGenerator:
     def __init__(self, bpm=75, sampling_rate=30, amplitude=1.5, noise_level=0.3,
                  drift_amplitude=0.0, drift_freq_hz=0.05,
                  spike_rate_per_s=0.0, spike_amplitude=8.0,
+                 settle_amplitude=0.0, settle_tau_s=1.5,
+                 harmonic_ratio=0.0,
                  mean_level=128.0, seed=None):
         self.bpm = bpm
         self.fs = sampling_rate
@@ -52,6 +54,9 @@ class SyntheticSignalGenerator:
         self.drift_freq_hz = drift_freq_hz
         self.spike_rate_per_s = spike_rate_per_s
         self.spike_amplitude = spike_amplitude
+        self.settle_amplitude = settle_amplitude  # camera auto-exposure settling
+        self.settle_tau_s = settle_tau_s
+        self.harmonic_ratio = harmonic_ratio  # 2nd-harmonic content (real PPG ~0.3-0.5)
         self.mean_level = mean_level
         self.rng = np.random.default_rng(seed)
 
@@ -61,9 +66,15 @@ class SyntheticSignalGenerator:
         t = np.arange(n) / self.fs
 
         pulse = self.amplitude * np.sin(2 * np.pi * (self.bpm / 60.0) * t)
+        if self.harmonic_ratio:
+            pulse += self.amplitude * self.harmonic_ratio * np.sin(4 * np.pi * (self.bpm / 60.0) * t)
         noise = self.rng.normal(0, self.noise_level, size=n)
         drift = self.drift_amplitude * np.sin(2 * np.pi * self.drift_freq_hz * t)
         trace = self.mean_level + pulse + noise + drift
+
+        if self.settle_amplitude:
+            # Camera auto-exposure convergence: large brightness decay at start
+            trace += self.settle_amplitude * np.exp(-t / self.settle_tau_s)
 
         if self.spike_rate_per_s > 0:
             n_spikes = int(round(duration_sec * self.spike_rate_per_s))

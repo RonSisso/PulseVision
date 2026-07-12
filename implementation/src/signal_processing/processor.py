@@ -38,6 +38,31 @@ class SignalProcessor:
     MIN_PLAUSIBLE_FS = 5.0
     MAX_PLAUSIBLE_FS = 120.0
 
+    # Do not estimate until this much signal has accumulated: a short window
+    # has too little spectral resolution and the first readings lock onto
+    # noise or the pulse's second harmonic.
+    MIN_ANALYSIS_SECONDS = 5.0
+
+    # The first reported reading must be backed by this many high-confidence
+    # estimates agreeing within the tolerance, so startup transients (camera
+    # auto-exposure, harmonic lock-in) never reach the display. The confidence
+    # bar excludes the estimator's "sticky" repeats (confidence <= 0.5), which
+    # would otherwise fake agreement. If warm-up hasn't passed after
+    # WARMUP_RELAX_AFTER_S, the bar drops to the normal display threshold so
+    # a persistently mediocre signal still produces a reading eventually.
+    FIRST_READING_CONSISTENCY_N = 3
+    FIRST_READING_TOLERANCE_BPM = 10.0
+    FIRST_READING_MIN_CONFIDENCE = 0.6
+    WARMUP_RELAX_AFTER_S = 17.0  # ~2s init + 5s buffer + 10s grace
+
+    # During warm-up, hold the gate while the raw buffer contains artifact
+    # samples (deviating more than WARMUP_ARTIFACT_MAD robust units from the
+    # buffer median): a motion/exposure artifact inside the analysis window
+    # can produce a high-confidence, self-consistent but wrong estimate.
+    # Checked on the raw (pre-filter) signal where spikes keep full amplitude.
+    WARMUP_ARTIFACT_MAD = 5.0
+    WARMUP_MAX_ARTIFACT_FRACTION = 0.01
+
     def __init__(self, sampling_rate=30):
         self.logger = logging.getLogger(__name__)
         self.fs = sampling_rate  # nominal rate; actual rate is measured per buffer
@@ -58,6 +83,10 @@ class SignalProcessor:
         self.hr_filter = HeartRateFilter()
         self.roi_checker = ROIStabilityChecker()
         self.last_bpm = None
+
+        # Warm-up: hold back output until the first estimates are consistent
+        self.reporting_started = False
+        self.first_reading_candidates = deque(maxlen=self.FIRST_READING_CONSISTENCY_N)
 
         # Initialization delay to avoid startup noise (in sample time)
         self.init_delay = 2.0  # seconds
@@ -192,14 +221,17 @@ class SignalProcessor:
         self.combined_buffer.append(combined_signal)
         self.sample_times.append(timestamp)
 
-        if len(self.combined_buffer) < self.fs * 2:
+        # Wait for MIN_ANALYSIS_SECONDS of signal (or a full buffer at high
+        # frame rates) before estimating at all
+        span = self.sample_times[-1] - self.sample_times[0]
+        if span < self.MIN_ANALYSIS_SECONDS and len(self.combined_buffer) < self.combined_buffer.maxlen:
             return ProcessorResult(None, 0.0)
 
         # Measure the actual sampling rate and resample onto a uniform grid
-        signal, actual_fs = self._uniform_signal()
+        raw_signal, actual_fs = self._uniform_signal()
 
         # Clean the trace (detrend -> bandpass -> normalize)
-        signal = self.preprocessor.enhance_heart_rate_signal(signal, fs=actual_fs)
+        signal = self.preprocessor.enhance_heart_rate_signal(raw_signal, fs=actual_fs)
 
         # Heart rate estimation in the frequency domain
         freq_bpm, freq_confidence = self.hr_estimator.estimate(signal, fs=actual_fs)
@@ -238,6 +270,31 @@ class SignalProcessor:
                     print(f"Large BPM change ({bpm_change:.1f}) with low confidence ({confidence:.2f}) - rejecting")
                     bpm = None
                     confidence = 0.0
+
+        # Warm-up gate: hold back the very first reading until several
+        # high-confidence estimates agree, so a startup artifact is never shown
+        if not self.reporting_started:
+            relaxed = (timestamp - self.start_time) > self.WARMUP_RELAX_AFTER_S
+            min_conf = 0.4 if relaxed else self.FIRST_READING_MIN_CONFIDENCE
+
+            # Artifact check on the raw buffer: while it contains outlier
+            # samples the analysis window is contaminated and even confident
+            # estimates cannot be trusted yet
+            med = np.median(raw_signal)
+            mad = np.median(np.abs(raw_signal - med)) + 1e-6
+            artifact_fraction = float(np.mean(np.abs(raw_signal - med) > self.WARMUP_ARTIFACT_MAD * mad))
+            contaminated = (not relaxed) and artifact_fraction > self.WARMUP_MAX_ARTIFACT_FRACTION
+
+            if bpm is not None and confidence >= min_conf and not contaminated:
+                self.first_reading_candidates.append(bpm)
+                candidates = list(self.first_reading_candidates)
+                if (len(candidates) == self.FIRST_READING_CONSISTENCY_N
+                        and max(candidates) - min(candidates) <= self.FIRST_READING_TOLERANCE_BPM):
+                    self.reporting_started = True
+                    print(f"Warm-up complete - first reading: {bpm:.1f} BPM")
+
+            if not self.reporting_started:
+                return ProcessorResult(None, 0.0)
 
         # Baseline-based heart rate calculation (baseline timing in sample time)
         if bpm is not None:
@@ -400,6 +457,10 @@ class SignalProcessor:
         self.last_bpm = None
         self.start_time = None
         self.initialized = False
+
+        # Reset warm-up gate
+        self.reporting_started = False
+        self.first_reading_candidates.clear()
 
         # Reset ROI stability tracking
         self.last_roi_stable = {

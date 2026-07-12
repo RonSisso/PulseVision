@@ -50,6 +50,10 @@ SYNTHETIC_CONDITIONS = {
     'noisy': dict(noise_level=1.5, drift_amplitude=0.0),
     'drift': dict(noise_level=0.3, drift_amplitude=3.0),
     'spikes': dict(noise_level=0.8, spike_rate_per_s=0.5, spike_amplitude=8.0),
+    'warmup': dict(noise_level=0.8, settle_amplitude=30.0, settle_tau_s=1.5),
+    # Realistic webcam start: pulse with 2nd-harmonic content + AE settling
+    'harmonic': dict(noise_level=0.8, harmonic_ratio=0.5,
+                     settle_amplitude=30.0, settle_tau_s=1.5),
 }
 
 # Note: append new cases at the end only — each case's RNG seed is derived
@@ -59,6 +63,8 @@ SYNTHETIC_SUITE = (
     + [(bpm, 'noisy') for bpm in (45, 60, 72, 90, 120, 150)]
     + [(72, 'drift')]
     + [(72, 'spikes'), (120, 'spikes')]
+    + [(72, 'warmup')]
+    + [(72, 'harmonic')]
 )
 
 
@@ -84,7 +90,7 @@ def _summarize(name, outputs, true_bpm, eval_start):
     """Compute accuracy metrics over the post-convergence window."""
     window = [(t, b) for t, b, _ in outputs if t >= eval_start]
     estimates = [b for _, b in window if b is not None]
-    first_valid = next((t for t, b, _ in outputs if b is not None), None)
+    first = next(((t, b) for t, b, _ in outputs if b is not None), None)
 
     return {
         'case': name,
@@ -94,7 +100,9 @@ def _summarize(name, outputs, true_bpm, eval_start):
         'rmse': rmse(estimates, true_bpm) if estimates else None,
         'bias': bias(estimates, true_bpm) if estimates else None,
         'coverage': (len(estimates) / len(window)) if window else 0.0,
-        'first_reading_s': first_valid,
+        'first_reading_s': first[0] if first else None,
+        'first_reading_bpm': first[1] if first else None,
+        'first_reading_error': abs(first[1] - true_bpm) if first else None,
         'n_frames': len(outputs),
         'eval_start_s': eval_start,
     }
@@ -206,14 +214,15 @@ def _fmt(value, spec):
 
 def print_report(results):
     header = (f"{'Case':<28} {'True':>6} {'Mean est':>9} {'MAE':>7} "
-              f"{'Bias':>7} {'Cover':>6} {'First':>6}")
+              f"{'Bias':>7} {'Cover':>6} {'First':>6} {'1stErr':>7}")
     print()
     print(header)
     print('-' * len(header))
     for r in results:
         print(f"{r['case']:<28} {r['true_bpm']:>6.1f} {_fmt(r['mean_est'], '9.1f')} "
               f"{_fmt(r['mae'], '7.2f')} {_fmt(r['bias'], '+7.2f')} "
-              f"{r['coverage']:>5.0%} {_fmt(r['first_reading_s'], '6.1f')}")
+              f"{r['coverage']:>5.0%} {_fmt(r['first_reading_s'], '6.1f')} "
+              f"{_fmt(r.get('first_reading_error'), '7.2f')}")
 
     scored = [r for r in results if r['mae'] is not None]
     failed = [r for r in results if r['mae'] is None]
