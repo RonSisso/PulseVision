@@ -9,28 +9,29 @@ resampled onto a uniform grid before spectral analysis, so dropped/jittered
 frames or video files with fps != 30 do not skew the estimated heart rate.
 """
 
-from collections import deque
-from dataclasses import dataclass
 import logging
 import time
+from collections import deque
+from dataclasses import dataclass
 
 import numpy as np
 from scipy.signal import welch
 
-from .preprocessing import SignalPreprocessor
-from .hr_estimation import HeartRateEstimator
 from .filtering import HeartRateFilter, ROIStabilityChecker
+from .hr_estimation import HeartRateEstimator
 from .pos import pos_pulse
+from .preprocessing import SignalPreprocessor
 
 
 @dataclass
 class ProcessorResult:
     """Output of one processing step."""
+
     bpm: float | None
     confidence: float
     fft_freqs: np.ndarray | None = None
     fft_power: np.ndarray | None = None
-    method: str = 'none'
+    method: str = "none"
 
 
 class SignalProcessor:
@@ -67,7 +68,7 @@ class SignalProcessor:
     def __init__(self, sampling_rate=30, use_pos=True):
         self.logger = logging.getLogger(__name__)
         self.fs = sampling_rate  # nominal rate; actual rate is measured per buffer
-        self.use_pos = use_pos   # POS colour projection vs. green-channel only
+        self.use_pos = use_pos  # POS colour projection vs. green-channel only
 
         # Combined RGB signal buffer and per-sample timestamps (~10 s at nominal rate)
         self.combined_buffer = deque(maxlen=self.fs * 10)
@@ -89,31 +90,27 @@ class SignalProcessor:
         self.initialized = False
 
         # ROI tracking for automatic reset
-        self.last_roi_stable = {
-            'forehead': False,
-            'left_cheek': False,
-            'right_cheek': False
-        }
+        self.last_roi_stable = {"forehead": False, "left_cheek": False, "right_cheek": False}
         self.roi_lost = False
 
         # Dynamic signal combination weights (adjusted based on ROI stability)
         self.base_weights = {
-            'forehead': 0.5,    # Forehead typically has good signal
-            'left_cheek': 0.25,  # Cheeks may have different signal quality
-            'right_cheek': 0.25
+            "forehead": 0.5,  # Forehead typically has good signal
+            "left_cheek": 0.25,  # Cheeks may have different signal quality
+            "right_cheek": 0.25,
         }
         self.roi_weights = self.base_weights.copy()
 
         # ROI health tracking for dynamic weight adjustment
         self.roi_health = {
-            'forehead': 1.0,    # Health score (0.0 = bad, 1.0 = perfect)
-            'left_cheek': 1.0,
-            'right_cheek': 1.0
+            "forehead": 1.0,  # Health score (0.0 = bad, 1.0 = perfect)
+            "left_cheek": 1.0,
+            "right_cheek": 1.0,
         }
         self.roi_stability_history = {
-            'forehead': deque(maxlen=10),    # Track last 10 stability checks
-            'left_cheek': deque(maxlen=10),
-            'right_cheek': deque(maxlen=10)
+            "forehead": deque(maxlen=10),  # Track last 10 stability checks
+            "left_cheek": deque(maxlen=10),
+            "right_cheek": deque(maxlen=10),
         }
 
     def process_frame(self, frame, roi, timestamp=None):
@@ -122,7 +119,7 @@ class SignalProcessor:
             return self.process_multiple_rois(frame, roi, timestamp)
         else:
             # Legacy single ROI format - convert to multi-ROI format
-            return self.process_multiple_rois(frame, {'forehead': roi}, timestamp)
+            return self.process_multiple_rois(frame, {"forehead": roi}, timestamp)
 
     def process_multiple_rois(self, frame, rois, timestamp=None):
         """Process multiple ROIs and combine their signals for heart rate estimation.
@@ -169,7 +166,7 @@ class SignalProcessor:
                 continue
 
             x, y, w, h = roi
-            roi_patch = frame[y:y + h, x:x + w]
+            roi_patch = frame[y : y + h, x : x + w]
 
             # Check if ROI is stable
             current_roi_stable = self.roi_checker.is_stable(roi_patch)
@@ -212,7 +209,10 @@ class SignalProcessor:
         # Wait for MIN_ANALYSIS_SECONDS of signal (or a full buffer at high
         # frame rates) before estimating at all
         span = self.sample_times[-1] - self.sample_times[0]
-        if span < self.MIN_ANALYSIS_SECONDS and len(self.combined_buffer) < self.combined_buffer.maxlen:
+        if (
+            span < self.MIN_ANALYSIS_SECONDS
+            and len(self.combined_buffer) < self.combined_buffer.maxlen
+        ):
             return ProcessorResult(None, 0.0)
 
         # Measure the actual sampling rate and resample RGB onto a uniform grid
@@ -257,7 +257,9 @@ class SignalProcessor:
 
             # Check confidence threshold
             elif confidence < min_confidence_threshold:
-                print(f"Low confidence measurement: {confidence:.2f} < {min_confidence_threshold} - rejecting")
+                print(
+                    f"Low confidence measurement: {confidence:.2f} < {min_confidence_threshold} - rejecting"
+                )
                 bpm = None
                 confidence = 0.0
 
@@ -279,8 +281,10 @@ class SignalProcessor:
             if bpm is not None and confidence >= min_conf and not contaminated:
                 self.first_reading_candidates.append(bpm)
                 candidates = list(self.first_reading_candidates)
-                if (len(candidates) == self.FIRST_READING_CONSISTENCY_N
-                        and max(candidates) - min(candidates) <= self.FIRST_READING_TOLERANCE_BPM):
+                if (
+                    len(candidates) == self.FIRST_READING_CONSISTENCY_N
+                    and max(candidates) - min(candidates) <= self.FIRST_READING_TOLERANCE_BPM
+                ):
                     self.reporting_started = True
                     print(f"Warm-up complete - first reading: {bpm:.1f} BPM")
 
@@ -291,7 +295,9 @@ class SignalProcessor:
         if bpm is not None:
             filtered_bpm = self.hr_filter.update(bpm, confidence)
             self.last_bpm = filtered_bpm
-            print(f"HR: {bpm:.1f} -> Filtered: {filtered_bpm:.1f} BPM (confidence {confidence:.2f})")
+            print(
+                f"HR: {bpm:.1f} -> Filtered: {filtered_bpm:.1f} BPM (confidence {confidence:.2f})"
+            )
         else:
             filtered_bpm = self.last_bpm  # Keep last valid measurement
             confidence = 0.0
@@ -331,7 +337,9 @@ class SignalProcessor:
         if not (self.MIN_PLAUSIBLE_FS <= actual_fs <= self.MAX_PLAUSIBLE_FS):
             self.logger.warning(
                 "Implausible measured sampling rate %.1f Hz; using nominal %d Hz",
-                actual_fs, self.fs)
+                actual_fs,
+                self.fs,
+            )
             return v, float(self.fs)
 
         uniform_t = np.linspace(t[0], t[-1], len(t))
@@ -347,11 +355,15 @@ class SignalProcessor:
 
         # Calculate health based on recent stability (last 10 checks)
         if len(self.roi_stability_history[roi_name]) > 0:
-            stability_ratio = sum(self.roi_stability_history[roi_name]) / len(self.roi_stability_history[roi_name])
+            stability_ratio = sum(self.roi_stability_history[roi_name]) / len(
+                self.roi_stability_history[roi_name]
+            )
 
             # Smooth health updates to avoid rapid changes
             alpha = 0.05  # Reduced learning rate for smoother weight transitions
-            self.roi_health[roi_name] = (1 - alpha) * self.roi_health[roi_name] + alpha * stability_ratio
+            self.roi_health[roi_name] = (1 - alpha) * self.roi_health[
+                roi_name
+            ] + alpha * stability_ratio
 
             # Ensure health stays in [0, 1] range
             self.roi_health[roi_name] = max(0.0, min(1.0, self.roi_health[roi_name]))
@@ -369,7 +381,9 @@ class SignalProcessor:
         # Normalize weights so they sum to 1.0
         if total_weighted_base > 0:
             for roi_name in self.roi_weights:
-                self.roi_weights[roi_name] = (self.base_weights[roi_name] * self.roi_health[roi_name]) / total_weighted_base
+                self.roi_weights[roi_name] = (
+                    self.base_weights[roi_name] * self.roi_health[roi_name]
+                ) / total_weighted_base
         else:
             # Fallback to equal weights if all ROIs are unhealthy
             for roi_name in self.roi_weights:
@@ -378,7 +392,9 @@ class SignalProcessor:
         # Check if weights changed significantly
         weights_changed = False
         for roi_name in self.roi_weights:
-            if abs(self.roi_weights[roi_name] - old_weights[roi_name]) > 0.05:  # 5% change threshold
+            if (
+                abs(self.roi_weights[roi_name] - old_weights[roi_name]) > 0.05
+            ):  # 5% change threshold
                 weights_changed = True
                 break
 
@@ -419,18 +435,10 @@ class SignalProcessor:
         self.first_reading_candidates.clear()
 
         # Reset ROI stability tracking
-        self.last_roi_stable = {
-            'forehead': False,
-            'left_cheek': False,
-            'right_cheek': False
-        }
+        self.last_roi_stable = {"forehead": False, "left_cheek": False, "right_cheek": False}
 
         # Reset health tracking to give ROIs a fresh start
-        self.roi_health = {
-            'forehead': 1.0,
-            'left_cheek': 1.0,
-            'right_cheek': 1.0
-        }
+        self.roi_health = {"forehead": 1.0, "left_cheek": 1.0, "right_cheek": 1.0}
         for roi_name in self.roi_stability_history:
             self.roi_stability_history[roi_name].clear()
 

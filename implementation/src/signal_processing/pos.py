@@ -17,8 +17,7 @@ import numpy as np
 # Projection matrix from the paper (channel order R, G, B):
 #   S1 =        G - B
 #   S2 = -2R +  G + B
-_P = np.array([[0.0, 1.0, -1.0],
-               [-2.0, 1.0, 1.0]])
+_P = np.array([[0.0, 1.0, -1.0], [-2.0, 1.0, 1.0]])
 
 
 def pos_pulse(rgb, fs, window_seconds=1.6):
@@ -41,17 +40,17 @@ def pos_pulse(rgb, fs, window_seconds=1.6):
     # Overlap-add the per-window projections (paper's Algorithm 1).
     pulse = np.zeros(n)
     for start in range(0, n - length + 1):
-        pulse[start:start + length] += _project(rgb[start:start + length])
+        pulse[start : start + length] += _project(rgb[start : start + length])
     return pulse
 
 
 def _project(window):
     """POS projection of one window: temporal-normalize, project, tune, center."""
     mean = np.mean(window, axis=0)
-    mean = np.where(np.abs(mean) < 1e-8, 1.0, mean)   # guard flat channels
-    normalized = window / mean                        # temporal normalization
+    mean = np.where(np.abs(mean) < 1e-8, 1.0, mean)  # guard flat channels
+    normalized = window / mean  # temporal normalization
 
-    projected = normalized @ _P.T                     # (L, 2)
+    projected = normalized @ _P.T  # (L, 2)
     s1, s2 = projected[:, 0], projected[:, 1]
 
     # Tune the two projections so their combination cancels intensity noise.
@@ -59,4 +58,4 @@ def _project(window):
     alpha = (np.std(s1) / std2) if std2 > 1e-8 else 0.0
     h = s1 + alpha * s2
 
-    return h - np.mean(h)                             # zero-mean for overlap-add
+    return h - np.mean(h)  # zero-mean for overlap-add

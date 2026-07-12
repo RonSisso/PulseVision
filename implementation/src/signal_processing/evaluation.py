@@ -11,7 +11,7 @@ def mae(estimates, true_bpm):
     """Mean absolute error of BPM estimates against a reference value."""
     estimates = np.asarray(estimates, dtype=float)
     if estimates.size == 0:
-        return float('nan')
+        return float("nan")
     return float(np.mean(np.abs(estimates - true_bpm)))
 
 
@@ -19,7 +19,7 @@ def rmse(estimates, true_bpm):
     """Root mean square error of BPM estimates against a reference value."""
     estimates = np.asarray(estimates, dtype=float)
     if estimates.size == 0:
-        return float('nan')
+        return float("nan")
     return float(np.sqrt(np.mean((estimates - true_bpm) ** 2)))
 
 
@@ -27,7 +27,7 @@ def bias(estimates, true_bpm):
     """Mean signed error (positive = overestimating)."""
     estimates = np.asarray(estimates, dtype=float)
     if estimates.size == 0:
-        return float('nan')
+        return float("nan")
     return float(np.mean(estimates - true_bpm))
 
 
@@ -47,15 +47,27 @@ class SyntheticSignalGenerator:
     (brief brightness bumps simulating head movement).
     """
 
-    def __init__(self, bpm=75, sampling_rate=30, amplitude=1.5, noise_level=0.3,
-                 drift_amplitude=0.0, drift_freq_hz=0.05,
-                 spike_rate_per_s=0.0, spike_amplitude=8.0,
-                 settle_amplitude=0.0, settle_tau_s=1.5,
-                 harmonic_ratio=0.0, bpm_end=None, step_time_s=None,
-                 mean_level=128.0, seed=None):
+    def __init__(
+        self,
+        bpm=75,
+        sampling_rate=30,
+        amplitude=1.5,
+        noise_level=0.3,
+        drift_amplitude=0.0,
+        drift_freq_hz=0.05,
+        spike_rate_per_s=0.0,
+        spike_amplitude=8.0,
+        settle_amplitude=0.0,
+        settle_tau_s=1.5,
+        harmonic_ratio=0.0,
+        bpm_end=None,
+        step_time_s=None,
+        mean_level=128.0,
+        seed=None,
+    ):
         self.bpm = bpm
-        self.bpm_end = bpm_end            # if set, heart rate steps to this value
-        self.step_time_s = step_time_s    # ...at this time (models e.g. standing up)
+        self.bpm_end = bpm_end  # if set, heart rate steps to this value
+        self.step_time_s = step_time_s  # ...at this time (models e.g. standing up)
         self.fs = sampling_rate
         self.amplitude = amplitude
         self.noise_level = noise_level
@@ -76,7 +88,9 @@ class SyntheticSignalGenerator:
 
         pulse = self.amplitude * np.sin(2 * np.pi * (self.bpm / 60.0) * t)
         if self.harmonic_ratio:
-            pulse += self.amplitude * self.harmonic_ratio * np.sin(4 * np.pi * (self.bpm / 60.0) * t)
+            pulse += (
+                self.amplitude * self.harmonic_ratio * np.sin(4 * np.pi * (self.bpm / 60.0) * t)
+            )
         noise = self.rng.normal(0, self.noise_level, size=n)
         drift = self.drift_amplitude * np.sin(2 * np.pi * self.drift_freq_hz * t)
         trace = self.mean_level + pulse + noise + drift
@@ -92,7 +106,9 @@ class SyntheticSignalGenerator:
                 center = self.rng.uniform(0, n)
                 width = self.rng.uniform(2, 6)  # spike std in samples (~0.1-0.2 s)
                 sign = 1.0 if self.rng.random() < 0.5 else -1.0
-                trace += sign * self.spike_amplitude * np.exp(-0.5 * ((samples - center) / width) ** 2)
+                trace += (
+                    sign * self.spike_amplitude * np.exp(-0.5 * ((samples - center) / width) ** 2)
+                )
 
         return trace
 
@@ -131,10 +147,12 @@ class SyntheticSignalGenerator:
                 center = self.rng.uniform(0, n)
                 width = self.rng.uniform(2, 6)
                 sign = 1.0 if self.rng.random() < 0.5 else -1.0
-                common = common + sign * self.spike_amplitude * np.exp(-0.5 * ((samples - center) / width) ** 2)
+                common = common + sign * self.spike_amplitude * np.exp(
+                    -0.5 * ((samples - center) / width) ** 2
+                )
 
         channels = []
-        for mean, ratio in zip(_CHANNEL_MEAN, _CHANNEL_PULSE_RATIO):
+        for mean, ratio in zip(_CHANNEL_MEAN, _CHANNEL_PULSE_RATIO, strict=True):
             noise = self.rng.normal(0, self.noise_level, size=n)
             channels.append(mean + ratio * pulse + common + noise)
         return np.stack(channels, axis=1)

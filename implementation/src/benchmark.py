@@ -21,27 +21,26 @@ import io
 import json
 import os
 import subprocess
-import sys
 from datetime import datetime
 
 import numpy as np
 
-SRC_DIR = os.path.dirname(os.path.abspath(__file__))
-if SRC_DIR not in sys.path:
-    sys.path.insert(0, SRC_DIR)
-
+from signal_processing.evaluation import SyntheticSignalGenerator, bias, mae, rmse
 from signal_processing.processor import SignalProcessor
-from signal_processing.evaluation import SyntheticSignalGenerator, mae, rmse, bias
+
+# Directory of this script (src/), used to locate the repo for git metadata.
+# src/ is already importable when this file is run as a script or via the tests.
+SRC_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Synthetic frame geometry: a 160x160 "face" with the same three ROIs the
 # live detector produces (forehead + two cheeks).
 FRAME_SIZE = 160
 SYNTH_ROIS = {
-    'forehead': (55, 15, 50, 30),
-    'left_cheek': (30, 80, 30, 20),
-    'right_cheek': (100, 80, 30, 20),
+    "forehead": (55, 15, 50, 30),
+    "left_cheek": (30, 80, 30, 20),
+    "right_cheek": (100, 80, 30, 20),
 }
-TEXTURE_STD = 6.0    # spatial skin texture so ROIStabilityChecker passes
+TEXTURE_STD = 6.0  # spatial skin texture so ROIStabilityChecker passes
 DEFAULT_DURATION = 35.0
 SETTLE_SECONDS = 22.0  # skip the pipeline's convergence window before scoring
 
@@ -51,28 +50,27 @@ SETTLE_SECONDS = 22.0  # skip the pipeline's convergence window before scoring
 STEP_DURATION = 50.0
 STEP_TIME = 25.0
 STEP_SETTLE_TOL = 5.0  # BPM band around the new rate that counts as "settled"
-STEP_SUITE = [(72, 108, 'clean'), (72, 108, 'noisy')]
+STEP_SUITE = [(72, 108, "clean"), (72, 108, "noisy")]
 
 SYNTHETIC_CONDITIONS = {
-    'clean': dict(noise_level=0.3, drift_amplitude=0.0),
-    'noisy': dict(noise_level=1.5, drift_amplitude=0.0),
-    'drift': dict(noise_level=0.3, drift_amplitude=3.0),
-    'spikes': dict(noise_level=0.8, spike_rate_per_s=0.5, spike_amplitude=8.0),
-    'warmup': dict(noise_level=0.8, settle_amplitude=30.0, settle_tau_s=1.5),
+    "clean": dict(noise_level=0.3, drift_amplitude=0.0),
+    "noisy": dict(noise_level=1.5, drift_amplitude=0.0),
+    "drift": dict(noise_level=0.3, drift_amplitude=3.0),
+    "spikes": dict(noise_level=0.8, spike_rate_per_s=0.5, spike_amplitude=8.0),
+    "warmup": dict(noise_level=0.8, settle_amplitude=30.0, settle_tau_s=1.5),
     # Realistic webcam start: pulse with 2nd-harmonic content + AE settling
-    'harmonic': dict(noise_level=0.8, harmonic_ratio=0.5,
-                     settle_amplitude=30.0, settle_tau_s=1.5),
+    "harmonic": dict(noise_level=0.8, harmonic_ratio=0.5, settle_amplitude=30.0, settle_tau_s=1.5),
 }
 
 # Note: append new cases at the end only — each case's RNG seed is derived
 # from its position, so inserting would silently change existing results.
 SYNTHETIC_SUITE = (
-    [(bpm, 'clean') for bpm in (45, 60, 72, 90, 120, 150)]
-    + [(bpm, 'noisy') for bpm in (45, 60, 72, 90, 120, 150)]
-    + [(72, 'drift')]
-    + [(72, 'spikes'), (120, 'spikes')]
-    + [(72, 'warmup')]
-    + [(72, 'harmonic')]
+    [(bpm, "clean") for bpm in (45, 60, 72, 90, 120, 150)]
+    + [(bpm, "noisy") for bpm in (45, 60, 72, 90, 120, 150)]
+    + [(72, "drift")]
+    + [(72, "spikes"), (120, "spikes")]
+    + [(72, "warmup")]
+    + [(72, "harmonic")]
 )
 
 
@@ -101,18 +99,18 @@ def _summarize(name, outputs, true_bpm, eval_start):
     first = next(((t, b) for t, b, _ in outputs if b is not None), None)
 
     return {
-        'case': name,
-        'true_bpm': float(true_bpm),
-        'mean_est': float(np.mean(estimates)) if estimates else None,
-        'mae': mae(estimates, true_bpm) if estimates else None,
-        'rmse': rmse(estimates, true_bpm) if estimates else None,
-        'bias': bias(estimates, true_bpm) if estimates else None,
-        'coverage': (len(estimates) / len(window)) if window else 0.0,
-        'first_reading_s': first[0] if first else None,
-        'first_reading_bpm': first[1] if first else None,
-        'first_reading_error': abs(first[1] - true_bpm) if first else None,
-        'n_frames': len(outputs),
-        'eval_start_s': eval_start,
+        "case": name,
+        "true_bpm": float(true_bpm),
+        "mean_est": float(np.mean(estimates)) if estimates else None,
+        "mae": mae(estimates, true_bpm) if estimates else None,
+        "rmse": rmse(estimates, true_bpm) if estimates else None,
+        "bias": bias(estimates, true_bpm) if estimates else None,
+        "coverage": (len(estimates) / len(window)) if window else 0.0,
+        "first_reading_s": first[0] if first else None,
+        "first_reading_bpm": first[1] if first else None,
+        "first_reading_error": abs(first[1] - true_bpm) if first else None,
+        "n_frames": len(outputs),
+        "eval_start_s": eval_start,
     }
 
 
@@ -120,12 +118,13 @@ def _summarize(name, outputs, true_bpm, eval_start):
 # Synthetic mode
 # ----------------------------------------------------------------------
 
+
 def _make_frame(rgb, rng):
     """Build one synthetic uint8 BGR frame from per-channel mean R, G, B values."""
     texture = rng.normal(0.0, TEXTURE_STD, (FRAME_SIZE, FRAME_SIZE)).astype(np.float32)
     r, g, b = rgb
     frame = np.empty((FRAME_SIZE, FRAME_SIZE, 3), dtype=np.float32)
-    frame[:, :, 0] = b + texture   # OpenCV channel order is B, G, R
+    frame[:, :, 0] = b + texture  # OpenCV channel order is B, G, R
     frame[:, :, 1] = g + texture
     frame[:, :, 2] = r + texture
     return np.clip(frame, 0, 255).astype(np.uint8)
@@ -160,8 +159,13 @@ def run_step_case(pre_bpm, post_bpm, condition, sampling_rate=30, seed=0, use_po
     """Heart rate steps pre_bpm -> post_bpm at STEP_TIME; measure tracking."""
     params = SYNTHETIC_CONDITIONS[condition]
     generator = SyntheticSignalGenerator(
-        bpm=pre_bpm, sampling_rate=sampling_rate, amplitude=1.5, seed=seed,
-        bpm_end=post_bpm, step_time_s=STEP_TIME, **params
+        bpm=pre_bpm,
+        sampling_rate=sampling_rate,
+        amplitude=1.5,
+        seed=seed,
+        bpm_end=post_bpm,
+        step_time_s=STEP_TIME,
+        **params,
     )
     trace = generator.generate_rgb(STEP_DURATION)
     texture_rng = np.random.default_rng(seed + 1)
@@ -184,19 +188,19 @@ def run_step_case(pre_bpm, post_bpm, condition, sampling_rate=30, seed=0, use_po
     # Steady-state accuracy over the final 8 s (well after the step)
     final = [b for t, b in post if t >= STEP_DURATION - 8]
     return {
-        'case': f"step {pre_bpm}->{post_bpm} {condition}",
-        'true_bpm': float(post_bpm),
-        'mean_est': float(np.mean(final)) if final else None,
-        'mae': mae(final, post_bpm) if final else None,
-        'rmse': rmse(final, post_bpm) if final else None,
-        'bias': bias(final, post_bpm) if final else None,
-        'coverage': 1.0,
-        'first_reading_s': None,
-        'first_reading_bpm': None,
-        'first_reading_error': None,
-        'settling_s': settling,
-        'n_frames': len(outputs),
-        'eval_start_s': STEP_TIME,
+        "case": f"step {pre_bpm}->{post_bpm} {condition}",
+        "true_bpm": float(post_bpm),
+        "mean_est": float(np.mean(final)) if final else None,
+        "mae": mae(final, post_bpm) if final else None,
+        "rmse": rmse(final, post_bpm) if final else None,
+        "bias": bias(final, post_bpm) if final else None,
+        "coverage": 1.0,
+        "first_reading_s": None,
+        "first_reading_bpm": None,
+        "first_reading_error": None,
+        "settling_s": settling,
+        "n_frames": len(outputs),
+        "eval_start_s": STEP_TIME,
     }
 
 
@@ -212,13 +216,15 @@ def run_step_suite(use_pos=True):
 # Video clip mode
 # ----------------------------------------------------------------------
 
+
 def run_clip(path, true_bpm, name=None, use_pos=True):
     import cv2
+
     from face_detection.mediapipe_detector import FaceDetector
 
     cap = cv2.VideoCapture(path)
     if not cap.isOpened():
-        raise IOError(f"Cannot open video: {path}")
+        raise OSError(f"Cannot open video: {path}")
 
     fps = cap.get(cv2.CAP_PROP_FPS)
     if not fps or fps <= 0 or fps > 120:
@@ -240,29 +246,29 @@ def run_clip(path, true_bpm, name=None, use_pos=True):
     cap.release()
 
     if not outputs:
-        raise IOError(f"No frames decoded from {path}")
+        raise OSError(f"No frames decoded from {path}")
 
     duration = outputs[-1][0]
     eval_start = SETTLE_SECONDS if duration >= 32 else duration * 0.5
     case_name = name or os.path.basename(path)
     summary = _summarize(f"clip {case_name}", outputs, true_bpm, eval_start)
-    summary['fps'] = fps
-    summary['duration_s'] = round(duration, 1)
+    summary["fps"] = fps
+    summary["duration_s"] = round(duration, 1)
     return summary
 
 
 def run_clip_suite(manifest_path, use_pos=True):
-    with open(manifest_path, 'r') as f:
+    with open(manifest_path) as f:
         manifest = json.load(f)
 
     base_dir = os.path.dirname(os.path.abspath(manifest_path))
     results = []
-    for entry in manifest['clips']:
-        path = entry['path']
+    for entry in manifest["clips"]:
+        path = entry["path"]
         if not os.path.isabs(path):
             path = os.path.join(base_dir, path)
         print(f"  running {entry['path']} (true {entry['true_bpm']} BPM) ...", flush=True)
-        results.append(run_clip(path, entry['true_bpm'], name=entry.get('label'), use_pos=use_pos))
+        results.append(run_clip(path, entry["true_bpm"], name=entry.get("label"), use_pos=use_pos))
     return results
 
 
@@ -270,68 +276,94 @@ def run_clip_suite(manifest_path, use_pos=True):
 # Reporting
 # ----------------------------------------------------------------------
 
+
 def _fmt(value, spec):
-    return format(value, spec) if value is not None else '   --'
+    return format(value, spec) if value is not None else "   --"
+
 
 def print_report(results):
-    header = (f"{'Case':<28} {'True':>6} {'Mean est':>9} {'MAE':>7} "
-              f"{'Bias':>7} {'Cover':>6} {'First':>6} {'1stErr':>7} {'Settle':>7}")
+    header = (
+        f"{'Case':<28} {'True':>6} {'Mean est':>9} {'MAE':>7} "
+        f"{'Bias':>7} {'Cover':>6} {'First':>6} {'1stErr':>7} {'Settle':>7}"
+    )
     print()
     print(header)
-    print('-' * len(header))
+    print("-" * len(header))
     for r in results:
-        print(f"{r['case']:<28} {r['true_bpm']:>6.1f} {_fmt(r['mean_est'], '9.1f')} "
-              f"{_fmt(r['mae'], '7.2f')} {_fmt(r['bias'], '+7.2f')} "
-              f"{r['coverage']:>5.0%} {_fmt(r['first_reading_s'], '6.1f')} "
-              f"{_fmt(r.get('first_reading_error'), '7.2f')} "
-              f"{_fmt(r.get('settling_s'), '7.1f')}")
+        print(
+            f"{r['case']:<28} {r['true_bpm']:>6.1f} {_fmt(r['mean_est'], '9.1f')} "
+            f"{_fmt(r['mae'], '7.2f')} {_fmt(r['bias'], '+7.2f')} "
+            f"{r['coverage']:>5.0%} {_fmt(r['first_reading_s'], '6.1f')} "
+            f"{_fmt(r.get('first_reading_error'), '7.2f')} "
+            f"{_fmt(r.get('settling_s'), '7.1f')}"
+        )
 
-    scored = [r for r in results if r['mae'] is not None]
-    failed = [r for r in results if r['mae'] is None]
-    print('-' * len(header))
+    scored = [r for r in results if r["mae"] is not None]
+    failed = [r for r in results if r["mae"] is None]
+    print("-" * len(header))
     if scored:
-        overall = float(np.mean([r['mae'] for r in scored]))
-        good = sum(1 for r in scored if r['mae'] <= 3.0)
-        print(f"Overall MAE: {overall:.2f} BPM over {len(scored)} cases "
-              f"| within 3 BPM: {good}/{len(results)}")
+        overall = float(np.mean([r["mae"] for r in scored]))
+        good = sum(1 for r in scored if r["mae"] <= 3.0)
+        print(
+            f"Overall MAE: {overall:.2f} BPM over {len(scored)} cases "
+            f"| within 3 BPM: {good}/{len(results)}"
+        )
     if failed:
-        print(f"NO OUTPUT in eval window: {len(failed)} case(s): "
-              + ', '.join(r['case'] for r in failed))
+        print(
+            f"NO OUTPUT in eval window: {len(failed)} case(s): "
+            + ", ".join(r["case"] for r in failed)
+        )
     print()
 
 
 def git_revision():
     try:
         return subprocess.check_output(
-            ['git', 'rev-parse', '--short', 'HEAD'],
-            cwd=SRC_DIR, text=True, stderr=subprocess.DEVNULL
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=SRC_DIR,
+            text=True,
+            stderr=subprocess.DEVNULL,
         ).strip()
     except Exception:
-        return 'unknown'
+        return "unknown"
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument('--synthetic', action='store_true',
-                        help='run the built-in synthetic suite (no videos needed)')
-    parser.add_argument('--clips', metavar='MANIFEST',
-                        help='run recorded clips listed in a JSON manifest')
-    parser.add_argument('--json', metavar='PATH', help='write results to a JSON file')
-    parser.add_argument('--label', default=None, help='label stored with the results')
-    parser.add_argument('--method', choices=('pos', 'green'), default='pos',
-                        help='pulse extraction method (default: pos)')
-    parser.add_argument('--duration', type=float, default=DEFAULT_DURATION,
-                        help='synthetic case duration in seconds (default %(default)s)')
+    parser.add_argument(
+        "--synthetic",
+        action="store_true",
+        help="run the built-in synthetic suite (no videos needed)",
+    )
+    parser.add_argument(
+        "--clips", metavar="MANIFEST", help="run recorded clips listed in a JSON manifest"
+    )
+    parser.add_argument("--json", metavar="PATH", help="write results to a JSON file")
+    parser.add_argument("--label", default=None, help="label stored with the results")
+    parser.add_argument(
+        "--method",
+        choices=("pos", "green"),
+        default="pos",
+        help="pulse extraction method (default: pos)",
+    )
+    parser.add_argument(
+        "--duration",
+        type=float,
+        default=DEFAULT_DURATION,
+        help="synthetic case duration in seconds (default %(default)s)",
+    )
     args = parser.parse_args()
 
     if not args.synthetic and not args.clips:
-        parser.error('choose at least one of --synthetic / --clips')
+        parser.error("choose at least one of --synthetic / --clips")
 
-    use_pos = (args.method == 'pos')
+    use_pos = args.method == "pos"
     results = []
     if args.synthetic:
-        print(f"Synthetic suite ({len(SYNTHETIC_SUITE)} steady + {len(STEP_SUITE)} step "
-              f"cases, fs=30, method={args.method}) ...")
+        print(
+            f"Synthetic suite ({len(SYNTHETIC_SUITE)} steady + {len(STEP_SUITE)} step "
+            f"cases, fs=30, method={args.method}) ..."
+        )
         results.extend(run_synthetic_suite(args.duration, use_pos=use_pos))
         results.extend(run_step_suite(use_pos=use_pos))
     if args.clips:
@@ -342,17 +374,17 @@ def main():
 
     if args.json:
         payload = {
-            'label': args.label or datetime.now().strftime('%Y-%m-%d %H:%M'),
-            'timestamp': datetime.now().isoformat(timespec='seconds'),
-            'git_revision': git_revision(),
-            'method': args.method,
-            'results': results,
+            "label": args.label or datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "timestamp": datetime.now().isoformat(timespec="seconds"),
+            "git_revision": git_revision(),
+            "method": args.method,
+            "results": results,
         }
         os.makedirs(os.path.dirname(os.path.abspath(args.json)), exist_ok=True)
-        with open(args.json, 'w') as f:
+        with open(args.json, "w") as f:
             json.dump(payload, f, indent=2)
         print(f"Results written to {args.json}")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

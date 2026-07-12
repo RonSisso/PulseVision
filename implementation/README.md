@@ -70,6 +70,22 @@ python src/main.py
 python src/benchmark.py --synthetic
 ```
 
+## Development
+
+Install the dev tools and run the checks that CI enforces:
+
+```bash
+pip install -r requirements-dev.txt
+ruff check .      # lint
+black --check .   # formatting (drop --check to auto-format)
+pytest            # unit tests for the signal-processing code
+```
+
+Linting, formatting and tests currently cover the signal-processing modules
+(`src/signal_processing/`, `src/benchmark.py`) and `tests/`; the GUI and
+database layers are excluded for now. CI (GitHub Actions) runs the same three
+checks on every push and pull request.
+
 ## Technical Details
 
 ### Signal Processing Pipeline

@@ -1,5 +1,5 @@
 import numpy as np
-from scipy.signal import welch, find_peaks
+from scipy.signal import find_peaks, welch
 
 
 class HeartRateEstimator:
@@ -43,7 +43,7 @@ class HeartRateEstimator:
             if len(peaks) == 0:
                 return None, 0.0
 
-            prominences = props['prominences']
+            prominences = props["prominences"]
             best = int(peaks[np.argmax(prominences)])
             hr_bpm = freqs[best] * 60.0
 

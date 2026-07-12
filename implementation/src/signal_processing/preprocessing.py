@@ -17,12 +17,12 @@ Design notes:
 """
 
 import numpy as np
-from scipy.signal import butter, filtfilt, detrend
+from scipy.signal import butter, detrend, filtfilt
 
 
 class SignalPreprocessor:
-    BAND_LOW_HZ = 0.5     # below the 40 BPM (0.67 Hz) search edge
-    BAND_HIGH_HZ = 4.0    # above the 180 BPM (3.0 Hz) search edge
+    BAND_LOW_HZ = 0.5  # below the 40 BPM (0.67 Hz) search edge
+    BAND_HIGH_HZ = 4.0  # above the 180 BPM (3.0 Hz) search edge
     FILTER_ORDER = 3
     OUTLIER_CLIP_MAD = 5.0  # clip normalized samples beyond +/- 5 MAD units
 
@@ -41,7 +41,7 @@ class SignalPreprocessor:
             nyquist = 0.5 * fs
             low = self.BAND_LOW_HZ / nyquist
             high = min(self.BAND_HIGH_HZ / nyquist, 0.99)
-            return butter(self.FILTER_ORDER, [low, high], btype='band')
+            return butter(self.FILTER_ORDER, [low, high], btype="band")
         except Exception as e:
             print(f"Bandpass filter setup error: {e}")
             return None, None
@@ -53,7 +53,10 @@ class SignalPreprocessor:
         redesigned when it drifts from the rate the coefficients assume.
         """
         try:
-            if fs is not None and abs(fs - self.design_fs) / self.design_fs > self.FS_REDESIGN_TOLERANCE:
+            if (
+                fs is not None
+                and abs(fs - self.design_fs) / self.design_fs > self.FS_REDESIGN_TOLERANCE
+            ):
                 self.design_fs = float(fs)
                 self.b_bandpass, self.a_bandpass = self._design_bandpass(self.design_fs)
 

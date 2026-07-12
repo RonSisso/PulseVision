@@ -1,6 +1,8 @@
-import numpy as np
-import cv2
 from collections import deque
+
+import cv2
+import numpy as np
+
 
 class HeartRateFilter:
     """Single-stage heart-rate post-filter: median outlier rejection + EMA.
@@ -28,7 +30,9 @@ class HeartRateFilter:
 
         lo, hi = self.physiological_range
         if not (lo <= new_bpm <= hi):
-            print(f"Physiological range violation: {new_bpm:.1f} BPM outside {self.physiological_range}")
+            print(
+                f"Physiological range violation: {new_bpm:.1f} BPM outside {self.physiological_range}"
+            )
             return self.smoothed
 
         self.recent.append(new_bpm)
@@ -48,6 +52,7 @@ class HeartRateFilter:
         self.recent.clear()
         self.smoothed = None
 
+
 class ROIStabilityChecker:
     def __init__(self, min_std=3.0):  # Reduced from 5.0 to 3.0 for less sensitivity
         self.min_std = min_std
@@ -55,7 +60,7 @@ class ROIStabilityChecker:
     def is_stable(self, roi_patch):
         gray = cv2.cvtColor(roi_patch, cv2.COLOR_BGR2GRAY)
         std_dev = np.std(gray)
-        
+
         # Adaptive threshold based on ROI size
         # Smaller ROIs get more lenient thresholds
         roi_area = roi_patch.shape[0] * roi_patch.shape[1]
@@ -65,5 +70,5 @@ class ROIStabilityChecker:
             adaptive_threshold = self.min_std * 0.85  # 15% more lenient
         else:  # Large ROI (like forehead)
             adaptive_threshold = self.min_std
-        
+
         return std_dev >= adaptive_threshold
