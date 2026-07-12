@@ -42,10 +42,13 @@ read from the file and used as the pipeline sampling rate.
 
 ## Metrics
 
-- **MAE / RMSE / bias** — computed over the converged window (after the 20 s
-  baseline establishment; for shorter clips, the second half).
+- **MAE / RMSE / bias** — computed over the converged window (the first ~22 s are
+  skipped to let the pipeline settle; for shorter clips, the second half).
 - **Cover** — fraction of frames in that window with a valid BPM output.
 - **First** — seconds until the first valid reading.
+- **1stErr** — error of the first reported reading (startup reliability).
+- **Settle** — for step-response cases, seconds after the rate change until the
+  estimate reaches and stays within tolerance of the new rate.
 
 The processor consumes explicit per-sample timestamps (frame_index / fps), so
 its timing behavior (2 s init delay, 20 s baseline) is deterministic and runs

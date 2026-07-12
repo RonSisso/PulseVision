@@ -21,25 +21,35 @@
 ## **Technical Pipeline Questions**
 
 ### Q: How does the system work step by step?
-**A:** The pipeline follows these 11 steps:
-1. **Input Video** - Capture video from webcam or file
-2. **Face Detection** - Use MediaPipe to detect facial landmarks
-3. **ROI Tracking** - Track forehead and cheek regions
-4. **Green Channel Extraction** - Extract green color intensity
-5. **Multi-ROI Signal Combination** - Combine signals from multiple regions
-6. **Signal Preprocessing** - Filter and clean the signal
-7. **Heart Rate Estimation** - Use FFT to find heart rate frequency
-8. **Signal Quality Assessment** - Evaluate signal reliability
-9. **Heart Rate Filtering** - Smooth and validate results
-10. **FFT Visualization** - Display frequency spectrum
-11. **GUI Display** - Show real-time results
+**A:** The pipeline follows these steps:
+1. **Input Video** - Capture video on a background worker thread, tagging each frame with a timestamp
+2. **Face Detection** - Use MediaPipe to detect 468 facial landmarks
+3. **ROI Tracking** - Track the forehead and both cheeks with stability-based weighting
+4. **Per-ROI RGB Extraction** - Take the mean red, green and blue of each region
+5. **Uniform Resampling** - Measure the true sampling rate from the timestamps and resample
+6. **POS Pulse Extraction** - Combine the RGB channels to isolate the pulse from lighting/motion
+7. **Signal Preprocessing** - Detrend, band-pass filter, robust-normalize
+8. **Heart Rate Estimation** - Welch PSD; most prominent peak in the heart-rate band
+9. **Warm-up Gate & Smoothing** - Withhold unreliable startup readings; median + confidence-weighted EMA
+10. **GUI Display & Storage** - Show real-time results and save to the database
 
-### Q: Why do you use the green channel specifically?
-**A:** The green channel is most sensitive to blood volume changes because:
-- Hemoglobin absorbs green light more effectively than red or blue
-- Green light penetrates skin to the depth where blood vessels are located
-- It provides the best signal-to-noise ratio for heart rate detection
-- It's less affected by ambient lighting variations
+### Q: Which colour channels do you use, and why?
+**A:** The heartbeat is **strongest in green** (hemoglobin absorbs green light most
+strongly), but it is present in red and blue too. Crucially, lighting and motion change all
+three channels *together*, while the pulse changes them in a fixed, unequal ratio. So rather
+than using green alone, the system uses **all three channels** and combines them with the
+**POS** method (next question) to separate the pulse from lighting/motion noise. Green-only
+extraction is retained as a fallback for comparison.
+
+### Q: What is POS and why did you add it?
+**A:** POS (Plane-Orthogonal-to-Skin, Wang et al. 2017) is a standard rPPG technique. It
+treats each moment as a point in Red-Green-Blue space and projects it onto the plane
+perpendicular to the skin-tone/intensity direction. Lighting and motion changes move all
+channels together (the intensity direction) and are cancelled; the pulse, which moves the
+channels in a different direction, survives. This makes the measurement far more robust to
+lighting and head motion than green-only extraction — the error mode that dominates real
+webcam use. In the project's offline benchmark, POS cut the error on motion-heavy cases
+roughly five-fold versus green-only.
 
 ### Q: Why use multiple ROIs (forehead and cheeks)?
 **A:** Multiple ROIs provide several benefits:
@@ -67,12 +77,17 @@
 ## **Signal Processing Questions**
 
 ### Q: How do you handle noise and artifacts?
-**A:** Multiple noise reduction techniques:
-- **Bandpass filtering**: Focus on heart rate frequencies (0.67-3.0 Hz)
-- **Notch filtering**: Remove common noise sources (1Hz, 2Hz, 3Hz, 4Hz)
-- **Motion artifact removal**: Statistical outlier detection
-- **Smoothing**: Savitzky-Golay filter for temporal smoothing
-- **Multi-ROI combination**: Reduces impact of local artifacts
+**A:** In order of impact:
+- **POS colour projection**: cancels lighting/motion changes (the largest error source) by
+  combining the RGB channels
+- **Multi-ROI combination**: averaging three stability-weighted regions reduces local artifacts
+- **Band-pass filtering**: a single 0.5–4.0 Hz Butterworth band-pass keeps only heart-rate
+  frequencies (its pass-band is wider than the search band so real heart rates aren't weakened)
+- **Robust (median/MAD) normalization**: keeps one motion spike from distorting the signal's scale
+- **Welch averaging**: averaging overlapping spectra suppresses random noise in the frequency domain
+
+Note there are deliberately **no notch filters**: at ~30 fps, mains flicker aliases outside
+the heart-rate band, and a notch at 1–3 Hz would delete real heart rates (60–180 BPM).
 
 ### Q: How do you ensure signal quality?
 **A:** Quality assessment includes:
@@ -83,23 +98,30 @@
 - **Confidence scoring**: Overall reliability assessment
 
 ### Q: What happens if the signal quality is poor?
-**A:** The system has several fallback mechanisms:
-- **Dynamic ROI weighting**: Reduce weight of poor-quality regions
-- **Confidence thresholds**: Only accept high-confidence measurements
-- **Temporal smoothing**: Use recent good measurements
-- **Baseline system**: Maintain stable baseline for 20 seconds
-- **Outlier rejection**: Filter out physiologically impossible values
+**A:** The system has several safeguards:
+- **Dynamic ROI weighting**: reduce the weight of poor-quality regions automatically
+- **Confidence threshold**: only readings above 0.4 confidence are reported
+- **Warm-up gate**: the first reading is withheld until several consistent, high-confidence
+  estimates agree and the signal is free of motion artifacts
+- **Median + EMA smoothing**: a lone bad estimate is stepped over by the median; the display
+  moves faster only when confidence is high
+- **Physiological range check**: values outside 40–180 BPM are rejected
 
 ---
 
 ## **Performance & Accuracy Questions**
 
 ### Q: What is the accuracy of the system?
-**A:** Based on testing:
-- **Target accuracy**: Within 2-3 BPM of reference (Apple Watch ECG)
-- **Real-world performance**: 74.6 BPM detected vs 76 BPM true (1.8% error)
-- **Confidence**: High confidence (0.4+ threshold) for reliable measurements
-- **Range**: Works for 40-180 BPM (covers normal and exercise heart rates)
+**A:** Accuracy is characterised with a reproducible **offline benchmark** (`src/benchmark.py`):
+- **Synthetic suite**: over generated signals with a known heart rate (45–180 BPM, under
+  noise, drift, motion spikes and camera warm-up), the current pipeline reports a mean
+  absolute error well under 1 BPM with full coverage. This measures the *algorithm* in
+  controlled conditions.
+- **Real-world validation**: the same harness can run over face videos recorded next to a
+  reference device (`--clips`). An earlier prototype spot-checked at 74.6 vs 76 BPM (~1.8%)
+  against an Apple Watch; because the pipeline has since been substantially revised, the
+  current build should be re-validated with recorded clips before a real-world figure is quoted.
+- **Range**: 40–180 BPM; **confidence threshold**: 0.4 to report a reading.
 
 ### Q: What is the processing speed?
 **A:** Real-time performance:
@@ -139,11 +161,11 @@
 
 ### Q: How do you handle different lighting conditions?
 **A:** 
-- **CLAHE**: Contrast Limited Adaptive Histogram Equalization
-- **Robust normalization**: Median and MAD-based normalization
-- **Multi-ROI**: Different regions may have varying lighting
-- **Adaptive processing**: Adjust parameters based on signal quality
-- **Baseline tracking**: Maintain stable reference over time
+- **POS colour projection**: lighting changes move all colour channels together and are
+  cancelled by the projection — this is the main defence
+- **Detrending**: removes slow brightness drift (auto-exposure, a passing cloud)
+- **Robust (median/MAD) normalization**: resists single large brightness excursions
+- **Multi-ROI weighting**: down-weights regions that fall into shadow
 
 ---
 
@@ -195,7 +217,7 @@
 
 ### Q: What are the limitations?
 **A:** 
-- **Accuracy**: ~2-3 BPM error vs. medical-grade devices
+- **Validation**: real-world accuracy still needs confirmation with recorded reference clips
 - **Lighting dependency**: Requires adequate lighting
 - **Motion sensitivity**: Significant movement can affect accuracy
 - **Individual variation**: May work better for some people than others
@@ -207,8 +229,8 @@
 
 ### Q: What improvements could be made?
 **A:** 
-- **Machine learning**: AI-based signal enhancement
-- **Multi-spectral**: Use multiple color channels
+- **Machine learning**: neural rPPG models (e.g. learned pulse extraction)
+- **Skin-tone-adaptive processing**: tune extraction per individual
 - **3D face modeling**: Better ROI selection
 - **Mobile optimization**: Smartphone app development
 - **Medical validation**: Clinical testing and certification
@@ -243,19 +265,19 @@
 
 ### Q: How do you handle the sampling rate and buffer size?
 **A:** 
-- **30 FPS**: Matches typical webcam frame rates
-- **10-second buffer**: Balances latency and frequency resolution
-- **Rolling window**: Maintains real-time processing
-- **Minimum samples**: 2 seconds (60 samples) for reliable analysis
-- **Update rate**: 10 Hz for responsive user experience
+- **Measured sampling rate**: the true rate is computed from frame timestamps (not assumed
+  to be 30 fps), and the signal is resampled onto a uniform grid — so any real frame rate reads correctly
+- **10-second buffer**: balances latency against frequency resolution
+- **Rolling window**: fixed-size buffers keep memory constant and processing real-time
+- **Minimum before a first reading**: 5 seconds of signal, for adequate frequency resolution
 
 ### Q: What is the confidence scoring system?
 **A:** 
-- **Multi-metric**: Combines SNR, peak clarity, temporal consistency
-- **Threshold**: 0.4 minimum for FFT method
-- **Dynamic**: Adjusts based on signal quality
-- **Validation**: Physiological range and change limits
-- **Feedback**: Provides reliability indication to user
+- **Formula**: `0.5 × peak_prominence_score + 0.5 × snr_score`, where the SNR score compares
+  the dominant spectral peak to the band's median (background) power
+- **Meaning**: high only when a single sharp peak dominates the heart-rate band
+- **Threshold**: 0.4 minimum to report a reading; the warm-up gate requires ≥ 0.6 for the first reading
+- **Use**: also sets how fast the smoothing follows a change (confident readings move faster)
 
 ---
 
@@ -279,11 +301,11 @@
 
 ### Q: How long does it take to get a stable reading?
 **A:** 
-- **Initialization**: 2-second delay to avoid startup noise
-- **Baseline establishment**: 20 seconds for stable baseline
-- **First reading**: Within 2-3 seconds of starting
-- **Stable reading**: 10-20 seconds for consistent measurements
-- **Full accuracy**: 30-60 seconds for optimal performance
+- **Signal build-up**: at least 5 seconds of video are buffered before any estimate
+- **First reading**: about 7 seconds in — deliberately withheld until it is trustworthy
+  (three consistent high-confidence estimates, no motion artifact in the window)
+- **Under heavy motion at startup**: the first reading may wait up to ~17 seconds
+- **Steady tracking**: the reading then follows real heart-rate changes within a few seconds
 
 ---
 
@@ -319,11 +341,12 @@
 
 ### Q: What are the key achievements of this project?
 **A:** 
-- **Real-time performance**: 30 FPS processing with 10 Hz updates
-- **Good accuracy**: Within 2-3 BPM of reference devices
-- **Robust system**: Handles various conditions and artifacts
-- **User-friendly interface**: Intuitive GUI with real-time feedback
-- **Complete pipeline**: End-to-end rPPG implementation
+- **Real-time performance**: background-threaded processing with a responsive GUI
+- **Literature-standard signal chain**: POS colour extraction plus a clean, well-characterised
+  filter and estimation pipeline
+- **Reproducible evaluation**: an offline benchmark that measures accuracy on every change
+- **Robust startup and motion handling**: a warm-up gate and stability-weighted multi-ROI design
+- **Complete system**: end-to-end rPPG with patient management and storage
 
 ### Q: What did you learn from this project?
 **A:** 

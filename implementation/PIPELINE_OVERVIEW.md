@@ -1,110 +1,105 @@
 # PulseVision - rPPG Heart Rate Detection Pipeline
 
-## Abstract Pipeline Overview
+Technical reference for the signal pipeline. For a from-scratch explanation aimed at
+readers new to signal processing, see `HOW_HEART_RATE_IS_MEASURED.md`.
 
-### 1. **Input Video**
-- **Source**: Webcam (default) or video file
-- **Format**: BGR color space, typically 30 FPS
-- **Resolution**: Variable (webcam dependent)
-- **Processing**: Frame-by-frame real-time processing
+## Pipeline Overview
 
-### 2. **Face Detection**
-- **Method**: MediaPipe Face Mesh
-- **Output**: 468 facial landmarks per frame
-- **Confidence**: min_detection_confidence=0.5, min_tracking_confidence=0.5
-- **Tracking**: Single face detection with landmark tracking
+### 1. Input Video
+- **Source**: webcam (default) or video file
+- **Threading**: capture, face detection and signal processing run on a background
+  worker thread (`gui/processing_worker.py`); the GUI thread only renders
+- **Timestamps**: each sample is tagged with a time — video files use `frame_index / fps`,
+  cameras use wall-clock time — so the true sampling rate can be measured downstream
 
-### 3. **ROI (Region of Interest) Tracking**
-- **Multiple ROIs**: Forehead, Left Cheek, Right Cheek
-- **Forehead**: Upper 30% of face bounding box
-- **Cheeks**: Left and right side regions of face
-- **Smoothing**: Exponential Moving Average (EMA) with α=0.6
-- **Stability**: ROI stability checking to detect motion artifacts
+### 2. Face Detection
+- **Method**: MediaPipe Face Mesh, 468 landmarks per frame
+- **Confidence**: `min_detection_confidence=0.5`, `min_tracking_confidence=0.5`
+- **ROIs**: forehead (≈70% × 26% of the face box) plus left and right cheeks
+  (≈18% × 12%), positioned from the landmark bounding box
+- **Smoothing**: ROI rectangles are EMA-smoothed (α = 0.6) to suppress detector jitter
 
-### 4. **Green Channel Extraction**
-- **Method**: Extract green channel (index 1) from BGR frame
-- **Processing**: Spatial averaging within each ROI
-- **Output**: Single green intensity value per ROI per frame
-- **Buffering**: 10-second rolling buffer per ROI (300 samples at 30 FPS)
+### 3. Per-ROI RGB Extraction & Combination
+- **Extraction**: mean R, G, B of each ROI patch (stored R, G, B for POS)
+- **Stability check**: grayscale standard deviation of each patch; below an
+  (ROI-size-adaptive) threshold the patch is flagged unstable
+- **Health & weighting**: each ROI keeps a rolling stability history that feeds a health
+  score (0–1); base weights (forehead 0.5, each cheek 0.25) are multiplied by health and
+  re-normalized, so unstable regions fade out and recover automatically
+- **Buffering**: the combined per-frame RGB value and its timestamp go into 10-second
+  rolling buffers
 
-### 5. **Multi-ROI Signal Combination**
-- **Weighting**: Dynamic weights based on ROI health/stability
-- **Base Weights**: Forehead=0.5, Left Cheek=0.25, Right Cheek=0.25
-- **Health Tracking**: ROI stability history (last 10 checks)
-- **Adaptive**: Weights adjust based on ROI quality over time
-- **Combination**: Weighted average of all valid ROIs
+### 4. Uniform Resampling
+- The actual sampling rate is computed from the buffered timestamps
+- The RGB channels are resampled onto a uniform time grid (per-channel linear
+  interpolation) before spectral analysis
+- If the measured rate is implausible (e.g. duplicate timestamps) the nominal rate is used
 
-### 6. **Signal Preprocessing**
-- **Detrending**: Remove linear trends
-- **Bandpass Filter**: 0.67-3.0 Hz (40-180 BPM) Butterworth filter
-- **Notch Filtering**: Remove 1Hz, 2Hz, 3Hz, 4Hz noise sources
-- **Normalization**: Robust normalization using median and MAD
-- **Smoothing**: Savitzky-Golay filter (adaptive window size)
-- **Motion Artifact Removal**: Statistical outlier detection and interpolation
+### 5. Pulse Extraction — POS
+- **Method**: POS (Plane-Orthogonal-to-Skin, Wang et al., IEEE TBME 2017), an overlap-add
+  sliding-window projection of the RGB trace onto a plane orthogonal to the skin-tone
+  direction, which cancels common-mode intensity variation (lighting, motion)
+- **Fallback**: `SignalProcessor(use_pos=False)` uses the green channel only
 
-### 7. **Heart Rate Estimation (FFT Method)**
-- **Method**: Welch's Power Spectral Density (PSD)
-- **Window**: 512 samples with 50% overlap
-- **Frequency Range**: 0.5-3.0 Hz (30-180 BPM)
-- **Peak Detection**: Find most prominent peak in frequency domain
-- **Confidence**: Based on peak prominence, SNR, and temporal consistency
-- **Validation**: Physiological range check (40-180 BPM)
+### 6. Preprocessing (`preprocessing.py`, `enhance_heart_rate_signal`)
+- **Detrend**: remove DC offset and linear trend
+- **Band-pass**: 4th-order Butterworth, 0.5–4.0 Hz, applied zero-phase (`filtfilt`);
+  the pass-band is deliberately wider than the 0.67–3.0 Hz search band so the response is
+  flat across all reportable heart rates. The filter is redesigned if the measured
+  sampling rate drifts from the design rate.
+- **Robust normalization**: median/MAD normalization with clipping at ±5 MAD
+- **No notch filters** (mains flicker aliases outside the HR band at 30 fps) and **no
+  extra smoothing passes** (Welch windowing handles residual noise)
 
-### 8. **Signal Quality Assessment**
-- **SNR**: Signal-to-noise ratio in heart rate frequency band
-- **Peak Clarity**: How distinct the main frequency peak is
-- **Temporal Consistency**: Stability of recent measurements
-- **Multi-ROI Quality**: Boost for multiple contributing ROIs
+### 7. Heart Rate Estimation (`hr_estimation.py`, `estimate`)
+- **Method**: Welch PSD, `nperseg = min(512, N)`, `nfft = 4096` for fine resolution
+- **Band**: 0.67–3.0 Hz (40–180 BPM)
+- **Peak**: most prominent peak (prominence ≥ 15% of max band power)
+- **Confidence**: `0.5 × prominence_score + 0.5 × snr_score`, where `snr_score` compares
+  the dominant peak to the band's median (background) power
+- The estimator only estimates; it does no temporal smoothing or change rejection
 
-### 9. **Heart Rate Filtering & Smoothing**
-- **Outlier Rejection**: Z-score based outlier detection
-- **Physiological Constraints**: Limit sudden changes (>20 BPM)
-- **Temporal Smoothing**: Exponential smoothing with confidence weighting
-- **Baseline System**: Establish baseline after 20 seconds, gradual updates
+### 8. Warm-up Gate (`processor.py`)
+- No estimate is produced until ≥ 5 s of signal is buffered (spectral resolution)
+- The first reported reading requires 3 consecutive estimates with confidence ≥ 0.6
+  agreeing within 10 BPM
+- The gate is held while the raw green buffer contains motion-artifact samples; the
+  confidence bar relaxes after ~17 s so a persistently mediocre signal still reports
 
-### 10. **FFT Visualization**
-- **Power Spectrum**: Real-time FFT power spectrum display
-- **Frequency Range**: 0.5-3.0 Hz focus
-- **Reference Lines**: 1.0Hz (60 BPM), 1.2Hz (72 BPM), 1.5Hz (90 BPM)
-- **Peak Highlighting**: Mark detected heart rate frequency
+### 9. Smoothing / Outlier Rejection (`filtering.py`, `HeartRateFilter`)
+- **Single stage**: median-of-5 (rejects lone-frame outliers) followed by a
+  confidence-weighted exponential moving average (α from 0.15 at low confidence to 0.6 at
+  high), so confident readings track real changes quickly without chattering on noise
+- **Physiological guard**: readings outside 40–180 BPM are dropped
 
-### 11. **GUI Display & Output**
-- **Real-time Display**: Heart rate, frequency, method indicator
-- **Plots**: rPPG signal, heart rate over time, FFT spectrum
-- **Method Indicator**: Shows "FFT" method being used
-- **Data Storage**: Save measurements to database
-- **Visual Feedback**: ROI overlays on video feed
+### 10. Display & Storage
+- Heart rate, frequency and the FFT spectrum drive three real-time plots (redrawn on a
+  250 ms timer); ROI overlays are drawn on the video feed
+- Instantaneous measurements are saved to SQLite at most once per second; a session
+  summary (average BPM) is saved when the user stops
 
 ## Key Technical Details
 
-### **Sampling & Buffering**
-- **Sampling Rate**: 30 Hz (30 FPS)
-- **Buffer Size**: 10 seconds (300 samples)
-- **Minimum Samples**: 2 seconds (60 samples) for processing
-- **Update Rate**: Every 0.1 seconds (3 frames)
+### Sampling & Buffering
+- **Nominal rate**: 30 Hz; **actual rate**: measured per buffer from timestamps
+- **Buffer**: 10 seconds (300 samples at 30 fps)
+- **Minimum before first estimate**: 5 seconds of signal
 
-### **Signal Processing Chain**
+### Signal Processing Chain
 ```
-Raw Video → Face Detection → ROI Tracking → Green Extraction → 
-Multi-ROI Combination → Preprocessing → FFT Analysis → 
-Peak Detection → Confidence Assessment → Filtering → Output
+Video → Face/ROI detection → per-ROI RGB → health-weighted combine →
+timestamp resample → POS projection → detrend / band-pass / normalize →
+Welch PSD peak → confidence → warm-up gate → median + EMA → output
 ```
 
-### **Quality Control**
-- **ROI Health**: Track stability of each ROI over time
-- **Signal Quality**: Multi-metric assessment (SNR, peak clarity, consistency)
-- **Confidence Thresholds**: Minimum 0.4 confidence for FFT method
-- **Physiological Validation**: Range checks and change limits
-
-### **Performance Optimizations**
-- **Multi-ROI**: Parallel processing of multiple face regions
-- **Adaptive Processing**: Adjust parameters based on signal quality
-- **Efficient Buffering**: Rolling buffers with fixed memory usage
-- **Real-time Processing**: Optimized for 30 FPS video processing
+### Quality Control
+- **ROI health**: per-region stability tracking with adaptive weights
+- **Confidence threshold**: 0.4 minimum to report a reading
+- **Warm-up gate**: suppresses unreliable startup readings
+- **Physiological validation**: 40–180 BPM range checks
 
 ## Current Configuration
-- **Method**: FFT-only (cardiac cycle detection removed)
-- **ROIs**: Forehead + Left/Right Cheeks
-- **Confidence Threshold**: 0.4 for FFT method
-- **Update Frequency**: 10 Hz (every 0.1 seconds)
-- **Display**: Real-time plots with FFT spectrum visualization
+- **Extraction**: POS (green-only available as a fallback)
+- **ROIs**: forehead + left/right cheeks
+- **Confidence threshold**: 0.4
+- **Smoothing**: single median + confidence-weighted EMA stage

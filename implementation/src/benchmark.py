@@ -43,7 +43,7 @@ SYNTH_ROIS = {
 }
 TEXTURE_STD = 6.0    # spatial skin texture so ROIStabilityChecker passes
 DEFAULT_DURATION = 35.0
-BASELINE_SETTLE = 22.0  # evaluate after the 20 s baseline + 2 s settling
+SETTLE_SECONDS = 22.0  # skip the pipeline's convergence window before scoring
 
 # Step-response cases: heart rate jumps mid-recording (e.g. standing up). The
 # step is placed well after any baseline-establishment period so it measures
@@ -145,7 +145,7 @@ def run_synthetic_case(bpm, condition, duration, sampling_rate=30, seed=0, use_p
 
     outputs = _run_processor(frames(), sampling_rate, use_pos=use_pos)
     name = f"synthetic {bpm:>3d} BPM {condition}"
-    return _summarize(name, outputs, bpm, eval_start=min(BASELINE_SETTLE, duration * 0.6))
+    return _summarize(name, outputs, bpm, eval_start=min(SETTLE_SECONDS, duration * 0.6))
 
 
 def run_synthetic_suite(duration, use_pos=True):
@@ -243,7 +243,7 @@ def run_clip(path, true_bpm, name=None, use_pos=True):
         raise IOError(f"No frames decoded from {path}")
 
     duration = outputs[-1][0]
-    eval_start = BASELINE_SETTLE if duration >= 32 else duration * 0.5
+    eval_start = SETTLE_SECONDS if duration >= 32 else duration * 0.5
     case_name = name or os.path.basename(path)
     summary = _summarize(f"clip {case_name}", outputs, true_bpm, eval_start)
     summary['fps'] = fps
