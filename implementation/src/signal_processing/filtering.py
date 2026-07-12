@@ -3,81 +3,50 @@ import cv2
 from collections import deque
 
 class HeartRateFilter:
-    def __init__(self, window_size=5):  # Smaller window for more responsive filtering
-        self.history = deque(maxlen=window_size)
-        self.confidence_history = deque(maxlen=window_size)
-        
-        # Simple filtering parameters
-        self.base_z_threshold = 2.5  # More lenient threshold
-        
-        # Physiological constraints
+    """Single-stage heart-rate post-filter: median outlier rejection + EMA.
+
+    A median over the last few readings rejects transient single-frame outliers
+    (the median ignores a lone spike) while a sustained change shifts the median
+    within a couple of frames. A confidence-weighted exponential moving average
+    then smooths residual jitter: confident readings move the output faster, so
+    a real heart-rate change is tracked promptly without the output chattering
+    on noisy frames. This replaces the previous stack of baseline anchoring,
+    z-score rejection, and change caps with one explainable step.
+    """
+
+    def __init__(self, window_size=5, min_alpha=0.15, max_alpha=0.6):
+        self.recent = deque(maxlen=window_size)
+        self.smoothed = None
+        self.min_alpha = min_alpha
+        self.max_alpha = max_alpha
         self.physiological_range = (40, 180)
-        self.max_physiological_change = 25  # More lenient for cleaner signals
 
     def update(self, new_bpm, confidence=0.5):
-        """Simple heart rate filtering focused on outlier rejection."""
+        """Fold one estimate into the running heart rate; returns the smoothed BPM."""
         if new_bpm is None:
-            return None
-        
-        # Check physiological range first
-        if not (self.physiological_range[0] <= new_bpm <= self.physiological_range[1]):
+            return self.smoothed
+
+        lo, hi = self.physiological_range
+        if not (lo <= new_bpm <= hi):
             print(f"Physiological range violation: {new_bpm:.1f} BPM outside {self.physiological_range}")
-            return self._get_fallback_bpm()
-        
-        # Add to history
-        self.history.append(new_bpm)
-        self.confidence_history.append(confidence)
-        
-        if len(self.history) < 3:
-            return new_bpm
-        
-        # Simple outlier detection
-        filtered_bpm = self._simple_outlier_detection(new_bpm, confidence)
-        
-        return filtered_bpm
+            return self.smoothed
 
-    def _simple_outlier_detection(self, new_bpm, confidence):
-        """Simple outlier detection based on z-score."""
-        history_array = np.array(list(self.history))
-        
-        # Calculate basic statistics
-        median_bpm = np.median(history_array)
-        std_dev = np.std(history_array)
-        
-        # Handle edge cases
-        if std_dev == 0 or np.isnan(std_dev):
-            return median_bpm
-        
-        # Calculate z-score
-        mean_val = np.mean(history_array)
-        z_score = (new_bpm - mean_val) / std_dev
-        
-        # Check for NaN or infinite values
-        if np.isnan(z_score) or np.isinf(z_score):
-            return median_bpm
-        
-        # Apply simple outlier rejection
-        if abs(z_score) > self.base_z_threshold:
-            print(f"Outlier detected: BPM={new_bpm:.1f}, z-score={z_score:.2f}, using median={median_bpm:.1f}")
-            return median_bpm
-        
-        # Check for physiologically unreasonable changes
-        if len(self.history) > 1:
-            last_bpm = self.history[-2]
-            bpm_change = abs(new_bpm - last_bpm)
-            if bpm_change > self.max_physiological_change and confidence < 0.8:
-                print(f"Physiological change constraint: {bpm_change:.1f} BPM change > "
-                      f"{self.max_physiological_change} BPM with low confidence")
-                return last_bpm
-        
-        return new_bpm
+        self.recent.append(new_bpm)
+        robust = float(np.median(self.recent))  # rejects lone outliers
 
-    def _get_fallback_bpm(self):
-        """Get a fallback BPM value when current measurement is invalid."""
-        if len(self.history) > 0:
-            return np.median(list(self.history))
+        if self.smoothed is None:
+            self.smoothed = robust
         else:
-            return 70.0  # Default resting heart rate
+            c = min(1.0, max(0.0, confidence))
+            alpha = self.min_alpha + (self.max_alpha - self.min_alpha) * c
+            self.smoothed = (1 - alpha) * self.smoothed + alpha * robust
+
+        return self.smoothed
+
+    def reset(self):
+        """Clear filter state for a fresh measurement."""
+        self.recent.clear()
+        self.smoothed = None
 
 class ROIStabilityChecker:
     def __init__(self, min_std=3.0):  # Reduced from 5.0 to 3.0 for less sensitivity

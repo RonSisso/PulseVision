@@ -51,9 +51,11 @@ class SyntheticSignalGenerator:
                  drift_amplitude=0.0, drift_freq_hz=0.05,
                  spike_rate_per_s=0.0, spike_amplitude=8.0,
                  settle_amplitude=0.0, settle_tau_s=1.5,
-                 harmonic_ratio=0.0,
+                 harmonic_ratio=0.0, bpm_end=None, step_time_s=None,
                  mean_level=128.0, seed=None):
         self.bpm = bpm
+        self.bpm_end = bpm_end            # if set, heart rate steps to this value
+        self.step_time_s = step_time_s    # ...at this time (models e.g. standing up)
         self.fs = sampling_rate
         self.amplitude = amplitude
         self.noise_level = noise_level
@@ -105,10 +107,18 @@ class SyntheticSignalGenerator:
         n = int(self.fs * duration_sec)
         t = np.arange(n) / self.fs
 
+        # Instantaneous phase from the (possibly stepping) heart rate. Using
+        # cumulative phase keeps the waveform continuous across a rate step.
+        if self.bpm_end is not None and self.step_time_s is not None:
+            inst_hz = np.where(t < self.step_time_s, self.bpm / 60.0, self.bpm_end / 60.0)
+            phase = 2 * np.pi * np.cumsum(inst_hz) / self.fs
+        else:
+            phase = 2 * np.pi * (self.bpm / 60.0) * t
+
         # Unit-amplitude pulse (with optional 2nd harmonic), scaled per channel
-        pulse = np.sin(2 * np.pi * (self.bpm / 60.0) * t)
+        pulse = np.sin(phase)
         if self.harmonic_ratio:
-            pulse += self.harmonic_ratio * np.sin(4 * np.pi * (self.bpm / 60.0) * t)
+            pulse += self.harmonic_ratio * np.sin(2 * phase)
         pulse *= self.amplitude
 
         # Common-mode intensity artifacts shared by all channels

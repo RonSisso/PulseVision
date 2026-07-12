@@ -45,6 +45,14 @@ TEXTURE_STD = 6.0    # spatial skin texture so ROIStabilityChecker passes
 DEFAULT_DURATION = 35.0
 BASELINE_SETTLE = 22.0  # evaluate after the 20 s baseline + 2 s settling
 
+# Step-response cases: heart rate jumps mid-recording (e.g. standing up). The
+# step is placed well after any baseline-establishment period so it measures
+# how fast the smoothing chain tracks a real change.
+STEP_DURATION = 50.0
+STEP_TIME = 25.0
+STEP_SETTLE_TOL = 5.0  # BPM band around the new rate that counts as "settled"
+STEP_SUITE = [(72, 108, 'clean'), (72, 108, 'noisy')]
+
 SYNTHETIC_CONDITIONS = {
     'clean': dict(noise_level=0.3, drift_amplitude=0.0),
     'noisy': dict(noise_level=1.5, drift_amplitude=0.0),
@@ -148,6 +156,58 @@ def run_synthetic_suite(duration, use_pos=True):
     return results
 
 
+def run_step_case(pre_bpm, post_bpm, condition, sampling_rate=30, seed=0, use_pos=True):
+    """Heart rate steps pre_bpm -> post_bpm at STEP_TIME; measure tracking."""
+    params = SYNTHETIC_CONDITIONS[condition]
+    generator = SyntheticSignalGenerator(
+        bpm=pre_bpm, sampling_rate=sampling_rate, amplitude=1.5, seed=seed,
+        bpm_end=post_bpm, step_time_s=STEP_TIME, **params
+    )
+    trace = generator.generate_rgb(STEP_DURATION)
+    texture_rng = np.random.default_rng(seed + 1)
+
+    def frames():
+        for rgb in trace:
+            yield _make_frame(rgb, texture_rng), SYNTH_ROIS
+
+    outputs = _run_processor(frames(), sampling_rate, use_pos=use_pos)
+
+    # Settling time: seconds after the step until the estimate enters the
+    # tolerance band around the new rate and never leaves it again.
+    post = [(t, b) for t, b, _ in outputs if b is not None and t >= STEP_TIME]
+    settling = None
+    for i, (t, _) in enumerate(post):
+        if all(abs(b - post_bpm) <= STEP_SETTLE_TOL for _, b in post[i:]):
+            settling = round(t - STEP_TIME, 1)
+            break
+
+    # Steady-state accuracy over the final 8 s (well after the step)
+    final = [b for t, b in post if t >= STEP_DURATION - 8]
+    return {
+        'case': f"step {pre_bpm}->{post_bpm} {condition}",
+        'true_bpm': float(post_bpm),
+        'mean_est': float(np.mean(final)) if final else None,
+        'mae': mae(final, post_bpm) if final else None,
+        'rmse': rmse(final, post_bpm) if final else None,
+        'bias': bias(final, post_bpm) if final else None,
+        'coverage': 1.0,
+        'first_reading_s': None,
+        'first_reading_bpm': None,
+        'first_reading_error': None,
+        'settling_s': settling,
+        'n_frames': len(outputs),
+        'eval_start_s': STEP_TIME,
+    }
+
+
+def run_step_suite(use_pos=True):
+    results = []
+    for i, (pre, post, condition) in enumerate(STEP_SUITE):
+        print(f"  running step {pre}->{post} / {condition} ...", flush=True)
+        results.append(run_step_case(pre, post, condition, seed=300 + i, use_pos=use_pos))
+    return results
+
+
 # ----------------------------------------------------------------------
 # Video clip mode
 # ----------------------------------------------------------------------
@@ -215,7 +275,7 @@ def _fmt(value, spec):
 
 def print_report(results):
     header = (f"{'Case':<28} {'True':>6} {'Mean est':>9} {'MAE':>7} "
-              f"{'Bias':>7} {'Cover':>6} {'First':>6} {'1stErr':>7}")
+              f"{'Bias':>7} {'Cover':>6} {'First':>6} {'1stErr':>7} {'Settle':>7}")
     print()
     print(header)
     print('-' * len(header))
@@ -223,7 +283,8 @@ def print_report(results):
         print(f"{r['case']:<28} {r['true_bpm']:>6.1f} {_fmt(r['mean_est'], '9.1f')} "
               f"{_fmt(r['mae'], '7.2f')} {_fmt(r['bias'], '+7.2f')} "
               f"{r['coverage']:>5.0%} {_fmt(r['first_reading_s'], '6.1f')} "
-              f"{_fmt(r.get('first_reading_error'), '7.2f')}")
+              f"{_fmt(r.get('first_reading_error'), '7.2f')} "
+              f"{_fmt(r.get('settling_s'), '7.1f')}")
 
     scored = [r for r in results if r['mae'] is not None]
     failed = [r for r in results if r['mae'] is None]
@@ -269,9 +330,10 @@ def main():
     use_pos = (args.method == 'pos')
     results = []
     if args.synthetic:
-        print(f"Synthetic suite ({len(SYNTHETIC_SUITE)} cases, "
-              f"{args.duration:.0f}s each, fs=30, method={args.method}) ...")
+        print(f"Synthetic suite ({len(SYNTHETIC_SUITE)} steady + {len(STEP_SUITE)} step "
+              f"cases, fs=30, method={args.method}) ...")
         results.extend(run_synthetic_suite(args.duration, use_pos=use_pos))
+        results.extend(run_step_suite(use_pos=use_pos))
     if args.clips:
         print(f"Clip suite from {args.clips} (method={args.method}) ...")
         results.extend(run_clip_suite(args.clips, use_pos=use_pos))

@@ -116,14 +116,6 @@ class SignalProcessor:
             'right_cheek': deque(maxlen=10)
         }
 
-        # Baseline heart rate system
-        self.baseline_hr = None
-        self.baseline_established = False
-        self.baseline_time = 20.0  # Establish baseline after 20 seconds
-        self.baseline_alpha = 0.1  # How much new measurements influence baseline
-        self.smoothed_hr = None
-        self.smoothing_alpha = 0.3  # How much new measurements influence smoothed HR
-
     def process_frame(self, frame, roi, timestamp=None):
         """Process one frame given a single ROI or a dict of ROIs."""
         if isinstance(roi, dict):
@@ -269,15 +261,6 @@ class SignalProcessor:
                 bpm = None
                 confidence = 0.0
 
-            # Check for sudden changes from last valid measurement
-            elif self.last_bpm is not None:
-                bpm_change = abs(bpm - self.last_bpm)
-                # Simple constraint - only reject if change is very large with low confidence
-                if bpm_change > 20 and confidence < 0.6:
-                    print(f"Large BPM change ({bpm_change:.1f}) with low confidence ({confidence:.2f}) - rejecting")
-                    bpm = None
-                    confidence = 0.0
-
         # Warm-up gate: hold back the very first reading until several
         # high-confidence estimates agree, so a startup artifact is never shown
         if not self.reporting_started:
@@ -304,47 +287,11 @@ class SignalProcessor:
             if not self.reporting_started:
                 return ProcessorResult(None, 0.0)
 
-        # Baseline-based heart rate calculation (baseline timing in sample time)
+        # Single-stage smoothing/outlier rejection (median + confidence-weighted EMA)
         if bpm is not None:
-            time_since_start = timestamp - self.start_time if self.start_time else 0
-
-            if not self.baseline_established and time_since_start >= self.baseline_time:
-                # Establish baseline after 20 seconds
-                self.baseline_hr = bpm
-                self.baseline_established = True
-                self.smoothed_hr = bpm
-                print(f"Baseline HR established: {bpm:.1f} BPM")
-
-            if self.baseline_established:
-                # Gradually update baseline with new measurements
-                self.baseline_hr = (1 - self.baseline_alpha) * self.baseline_hr + self.baseline_alpha * bpm
-
-                # Calculate final HR as weighted combination of baseline and new measurement
-                # Higher confidence = more weight to new measurement
-                baseline_weight = 0.6  # 60% baseline weight
-                new_weight = 0.4 * confidence  # Up to 40% new measurement weight
-                total_weight = baseline_weight + new_weight
-
-                if total_weight > 0:
-                    final_bpm = (baseline_weight * self.baseline_hr + new_weight * bpm) / total_weight
-                else:
-                    final_bpm = self.baseline_hr
-
-                # Apply additional smoothing
-                if self.smoothed_hr is None:
-                    self.smoothed_hr = final_bpm
-                else:
-                    self.smoothed_hr = (1 - self.smoothing_alpha) * self.smoothed_hr + self.smoothing_alpha * final_bpm
-
-                # Apply outlier rejection
-                filtered_bpm = self.hr_filter.update(self.smoothed_hr, confidence)
-                self.last_bpm = filtered_bpm
-
-                print(f"HR: {bpm:.1f} -> Baseline: {self.baseline_hr:.1f} -> Smoothed: {self.smoothed_hr:.1f} -> Final: {filtered_bpm:.1f} BPM")
-            else:
-                # Before baseline establishment, use normal filtering
-                filtered_bpm = self.hr_filter.update(bpm, confidence)
-                self.last_bpm = filtered_bpm
+            filtered_bpm = self.hr_filter.update(bpm, confidence)
+            self.last_bpm = filtered_bpm
+            print(f"HR: {bpm:.1f} -> Filtered: {filtered_bpm:.1f} BPM (confidence {confidence:.2f})")
         else:
             filtered_bpm = self.last_bpm  # Keep last valid measurement
             confidence = 0.0
@@ -490,10 +437,8 @@ class SignalProcessor:
         # Reset weights to base values
         self.roi_weights = self.base_weights.copy()
 
-        # Reset baseline system
-        self.baseline_hr = None
-        self.baseline_established = False
-        self.smoothed_hr = None
+        # Reset the heart-rate post-filter
+        self.hr_filter.reset()
 
         self.logger.debug("Signal processor reset - initialization delay will be applied")
 
