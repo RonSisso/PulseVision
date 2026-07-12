@@ -31,6 +31,13 @@ def bias(estimates, true_bpm):
     return float(np.mean(estimates - true_bpm))
 
 
+# Per-channel model for generate_rgb (channel order R, G, B).
+# Pulse is strongest in green (hemoglobin absorbs ~530 nm); ratios are relative
+# to the green amplitude. Means are a rough warm-skin tone.
+_CHANNEL_PULSE_RATIO = (0.33, 1.0, 0.20)
+_CHANNEL_MEAN = (150.0, 120.0, 110.0)
+
+
 class SyntheticSignalGenerator:
     """Generate a realistic green-channel trace containing a known pulse.
 
@@ -86,3 +93,38 @@ class SyntheticSignalGenerator:
                 trace += sign * self.spike_amplitude * np.exp(-0.5 * ((samples - center) / width) ** 2)
 
         return trace
+
+    def generate_rgb(self, duration_sec):
+        """Return an (N, 3) RGB trace (columns R, G, B) modeling real rPPG colour.
+
+        The pulse appears in every channel (green strongest); intensity
+        artifacts (drift, camera auto-exposure settling, motion spikes) are
+        common-mode across channels, exactly the structure POS is designed to
+        exploit; sensor noise is independent per channel.
+        """
+        n = int(self.fs * duration_sec)
+        t = np.arange(n) / self.fs
+
+        # Unit-amplitude pulse (with optional 2nd harmonic), scaled per channel
+        pulse = np.sin(2 * np.pi * (self.bpm / 60.0) * t)
+        if self.harmonic_ratio:
+            pulse += self.harmonic_ratio * np.sin(4 * np.pi * (self.bpm / 60.0) * t)
+        pulse *= self.amplitude
+
+        # Common-mode intensity artifacts shared by all channels
+        common = self.drift_amplitude * np.sin(2 * np.pi * self.drift_freq_hz * t)
+        if self.settle_amplitude:
+            common = common + self.settle_amplitude * np.exp(-t / self.settle_tau_s)
+        if self.spike_rate_per_s > 0:
+            samples = np.arange(n)
+            for _ in range(int(round(duration_sec * self.spike_rate_per_s))):
+                center = self.rng.uniform(0, n)
+                width = self.rng.uniform(2, 6)
+                sign = 1.0 if self.rng.random() < 0.5 else -1.0
+                common = common + sign * self.spike_amplitude * np.exp(-0.5 * ((samples - center) / width) ** 2)
+
+        channels = []
+        for mean, ratio in zip(_CHANNEL_MEAN, _CHANNEL_PULSE_RATIO):
+            noise = self.rng.normal(0, self.noise_level, size=n)
+            channels.append(mean + ratio * pulse + common + noise)
+        return np.stack(channels, axis=1)

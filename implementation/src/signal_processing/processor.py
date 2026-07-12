@@ -20,6 +20,7 @@ from scipy.signal import welch
 from .preprocessing import SignalPreprocessor
 from .hr_estimation import HeartRateEstimator
 from .filtering import HeartRateFilter, ROIStabilityChecker
+from .pos import pos_pulse
 
 
 @dataclass
@@ -63,18 +64,12 @@ class SignalProcessor:
     WARMUP_ARTIFACT_MAD = 5.0
     WARMUP_MAX_ARTIFACT_FRACTION = 0.01
 
-    def __init__(self, sampling_rate=30):
+    def __init__(self, sampling_rate=30, use_pos=True):
         self.logger = logging.getLogger(__name__)
         self.fs = sampling_rate  # nominal rate; actual rate is measured per buffer
+        self.use_pos = use_pos   # POS colour projection vs. green-channel only
 
-        # Multiple ROI buffers for different regions
-        self.buffers = {
-            'forehead': deque(maxlen=self.fs * 10),
-            'left_cheek': deque(maxlen=self.fs * 10),
-            'right_cheek': deque(maxlen=self.fs * 10)
-        }
-
-        # Combined signal buffer and per-sample timestamps (~10 s at nominal rate)
+        # Combined RGB signal buffer and per-sample timestamps (~10 s at nominal rate)
         self.combined_buffer = deque(maxlen=self.fs * 10)
         self.sample_times = deque(maxlen=self.fs * 10)
 
@@ -191,12 +186,13 @@ class SignalProcessor:
             # Update ROI health based on stability
             self._update_roi_health(roi_name, current_roi_stable)
 
-            # Always try to extract signal, but with reduced weight if unstable
+            # Extract per-channel means. OpenCV frames are BGR; store as
+            # R, G, B so POS receives channels in its expected order.
             try:
-                green = roi_patch[:, :, 1].astype(np.float32)
-                mean_val = np.mean(green)
-                self.buffers[roi_name].append(mean_val)
-                roi_signals[roi_name] = mean_val
+                b = float(np.mean(roi_patch[:, :, 0]))
+                g = float(np.mean(roi_patch[:, :, 1]))
+                r = float(np.mean(roi_patch[:, :, 2]))
+                roi_signals[roi_name] = np.array([r, g, b], dtype=float)
                 valid_rois += 1
             except Exception as e:
                 print(f"Error processing {roi_name} ROI: {e}")
@@ -227,11 +223,22 @@ class SignalProcessor:
         if span < self.MIN_ANALYSIS_SECONDS and len(self.combined_buffer) < self.combined_buffer.maxlen:
             return ProcessorResult(None, 0.0)
 
-        # Measure the actual sampling rate and resample onto a uniform grid
-        raw_signal, actual_fs = self._uniform_signal()
+        # Measure the actual sampling rate and resample RGB onto a uniform grid
+        rgb_uniform, actual_fs = self._uniform_signal()
+        green = rgb_uniform[:, 1]
+
+        # Extract the pulse: POS colour projection (all channels) or green only
+        if self.use_pos:
+            try:
+                pulse = pos_pulse(rgb_uniform, actual_fs)
+            except Exception as e:
+                print(f"POS extraction failed ({e}); falling back to green")
+                pulse = green
+        else:
+            pulse = green
 
         # Clean the trace (detrend -> bandpass -> normalize)
-        signal = self.preprocessor.enhance_heart_rate_signal(raw_signal, fs=actual_fs)
+        signal = self.preprocessor.enhance_heart_rate_signal(pulse, fs=actual_fs)
 
         # Heart rate estimation in the frequency domain
         freq_bpm, freq_confidence = self.hr_estimator.estimate(signal, fs=actual_fs)
@@ -277,12 +284,13 @@ class SignalProcessor:
             relaxed = (timestamp - self.start_time) > self.WARMUP_RELAX_AFTER_S
             min_conf = 0.4 if relaxed else self.FIRST_READING_MIN_CONFIDENCE
 
-            # Artifact check on the raw buffer: while it contains outlier
-            # samples the analysis window is contaminated and even confident
+            # Artifact check on the raw green brightness (not the POS pulse,
+            # which deliberately suppresses these artifacts): while the window
+            # holds outlier samples it is contaminated and even confident
             # estimates cannot be trusted yet
-            med = np.median(raw_signal)
-            mad = np.median(np.abs(raw_signal - med)) + 1e-6
-            artifact_fraction = float(np.mean(np.abs(raw_signal - med) > self.WARMUP_ARTIFACT_MAD * mad))
+            med = np.median(green)
+            mad = np.median(np.abs(green - med)) + 1e-6
+            artifact_fraction = float(np.mean(np.abs(green - med) > self.WARMUP_ARTIFACT_MAD * mad))
             contaminated = (not relaxed) and artifact_fraction > self.WARMUP_MAX_ARTIFACT_FRACTION
 
             if bpm is not None and confidence >= min_conf and not contaminated:
@@ -359,14 +367,14 @@ class SignalProcessor:
         return ProcessorResult(filtered_bpm, confidence, fft_freqs, fft_power, method_used)
 
     def _uniform_signal(self):
-        """Resample the buffered samples onto a uniform time grid.
+        """Resample the buffered RGB samples onto a uniform time grid.
 
-        Returns (signal, actual_fs). Uses the mean sampling rate measured from
-        the timestamps; falls back to the nominal rate if the measurement is
-        implausible (e.g. duplicate timestamps).
+        Returns (rgb, actual_fs) where rgb is (N, 3). Uses the mean sampling
+        rate measured from the timestamps; falls back to the nominal rate if
+        the measurement is implausible (e.g. duplicate timestamps).
         """
         t = np.asarray(self.sample_times, dtype=float)
-        v = np.asarray(self.combined_buffer, dtype=float)
+        v = np.asarray(self.combined_buffer, dtype=float)  # (N, 3)
 
         span = t[-1] - t[0]
         if span <= 0:
@@ -380,7 +388,10 @@ class SignalProcessor:
             return v, float(self.fs)
 
         uniform_t = np.linspace(t[0], t[-1], len(t))
-        return np.interp(uniform_t, t, v), float(actual_fs)
+        out = np.empty_like(v)
+        for c in range(v.shape[1]):
+            out[:, c] = np.interp(uniform_t, t, v[:, c])
+        return out, float(actual_fs)
 
     def _update_roi_health(self, roi_name, is_stable):
         """Update ROI health based on stability."""
@@ -427,13 +438,13 @@ class SignalProcessor:
         return weights_changed
 
     def _combine_roi_signals(self, roi_signals):
-        """Combine signals from multiple ROIs using dynamic weighted average."""
+        """Combine per-ROI RGB vectors using dynamic weighted average."""
         if not roi_signals:
-            return 0.0
+            return np.zeros(3)
 
         # Calculate weighted average using current dynamic weights
         total_weight = 0.0
-        weighted_sum = 0.0
+        weighted_sum = np.zeros(3)
 
         for roi_name, signal_value in roi_signals.items():
             weight = self.roi_weights.get(roi_name, 0.0)
@@ -444,13 +455,11 @@ class SignalProcessor:
             return weighted_sum / total_weight
         else:
             # Fallback to simple average if no weights
-            return np.mean(list(roi_signals.values()))
+            return np.mean(list(roi_signals.values()), axis=0)
 
     def reset(self):
         """Reset the signal processor state for a fresh measurement."""
-        # Clear all buffers
-        for buffer in self.buffers.values():
-            buffer.clear()
+        # Clear buffers
         self.combined_buffer.clear()
         self.sample_times.clear()
 

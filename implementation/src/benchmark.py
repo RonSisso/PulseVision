@@ -68,14 +68,14 @@ SYNTHETIC_SUITE = (
 )
 
 
-def _run_processor(frame_roi_iter, sampling_rate):
+def _run_processor(frame_roi_iter, sampling_rate, use_pos=True):
     """Drive a fresh SignalProcessor over (frame, rois) pairs.
 
     Each frame is stamped with frame_index / sampling_rate. Returns a list of
     (t_seconds, bpm_or_None, confidence) per frame. The processor's per-frame
     prints are suppressed to keep output readable.
     """
-    sp = SignalProcessor(sampling_rate=sampling_rate)
+    sp = SignalProcessor(sampling_rate=sampling_rate, use_pos=use_pos)
     outputs = []
     sink = io.StringIO()
     with contextlib.redirect_stdout(sink):
@@ -112,38 +112,39 @@ def _summarize(name, outputs, true_bpm, eval_start):
 # Synthetic mode
 # ----------------------------------------------------------------------
 
-def _make_frame(green_value, rng):
-    """Build one synthetic uint8 BGR frame with the pulse on the green channel."""
+def _make_frame(rgb, rng):
+    """Build one synthetic uint8 BGR frame from per-channel mean R, G, B values."""
     texture = rng.normal(0.0, TEXTURE_STD, (FRAME_SIZE, FRAME_SIZE)).astype(np.float32)
+    r, g, b = rgb
     frame = np.empty((FRAME_SIZE, FRAME_SIZE, 3), dtype=np.float32)
-    frame[:, :, 0] = 128.0 + texture
-    frame[:, :, 1] = green_value + texture
-    frame[:, :, 2] = 128.0 + texture
+    frame[:, :, 0] = b + texture   # OpenCV channel order is B, G, R
+    frame[:, :, 1] = g + texture
+    frame[:, :, 2] = r + texture
     return np.clip(frame, 0, 255).astype(np.uint8)
 
 
-def run_synthetic_case(bpm, condition, duration, sampling_rate=30, seed=0):
+def run_synthetic_case(bpm, condition, duration, sampling_rate=30, seed=0, use_pos=True):
     params = SYNTHETIC_CONDITIONS[condition]
     generator = SyntheticSignalGenerator(
         bpm=bpm, sampling_rate=sampling_rate, amplitude=1.5, seed=seed, **params
     )
-    trace = generator.generate(duration)
+    trace = generator.generate_rgb(duration)  # (N, 3)
     texture_rng = np.random.default_rng(seed + 1)
 
     def frames():
-        for green_value in trace:
-            yield _make_frame(green_value, texture_rng), SYNTH_ROIS
+        for rgb in trace:
+            yield _make_frame(rgb, texture_rng), SYNTH_ROIS
 
-    outputs = _run_processor(frames(), sampling_rate)
+    outputs = _run_processor(frames(), sampling_rate, use_pos=use_pos)
     name = f"synthetic {bpm:>3d} BPM {condition}"
     return _summarize(name, outputs, bpm, eval_start=min(BASELINE_SETTLE, duration * 0.6))
 
 
-def run_synthetic_suite(duration):
+def run_synthetic_suite(duration, use_pos=True):
     results = []
     for i, (bpm, condition) in enumerate(SYNTHETIC_SUITE):
         print(f"  running {bpm} BPM / {condition} ...", flush=True)
-        results.append(run_synthetic_case(bpm, condition, duration, seed=100 + i))
+        results.append(run_synthetic_case(bpm, condition, duration, seed=100 + i, use_pos=use_pos))
     return results
 
 
@@ -151,7 +152,7 @@ def run_synthetic_suite(duration):
 # Video clip mode
 # ----------------------------------------------------------------------
 
-def run_clip(path, true_bpm, name=None):
+def run_clip(path, true_bpm, name=None, use_pos=True):
     import cv2
     from face_detection.mediapipe_detector import FaceDetector
 
@@ -175,7 +176,7 @@ def run_clip(path, true_bpm, name=None):
             rois = detector.get_all_rois(frame, landmarks) if landmarks is not None else None
             yield frame, rois
 
-    outputs = _run_processor(frames(), sampling_rate=int(round(fps)))
+    outputs = _run_processor(frames(), sampling_rate=int(round(fps)), use_pos=use_pos)
     cap.release()
 
     if not outputs:
@@ -190,7 +191,7 @@ def run_clip(path, true_bpm, name=None):
     return summary
 
 
-def run_clip_suite(manifest_path):
+def run_clip_suite(manifest_path, use_pos=True):
     with open(manifest_path, 'r') as f:
         manifest = json.load(f)
 
@@ -201,7 +202,7 @@ def run_clip_suite(manifest_path):
         if not os.path.isabs(path):
             path = os.path.join(base_dir, path)
         print(f"  running {entry['path']} (true {entry['true_bpm']} BPM) ...", flush=True)
-        results.append(run_clip(path, entry['true_bpm'], name=entry.get('label')))
+        results.append(run_clip(path, entry['true_bpm'], name=entry.get('label'), use_pos=use_pos))
     return results
 
 
@@ -256,6 +257,8 @@ def main():
                         help='run recorded clips listed in a JSON manifest')
     parser.add_argument('--json', metavar='PATH', help='write results to a JSON file')
     parser.add_argument('--label', default=None, help='label stored with the results')
+    parser.add_argument('--method', choices=('pos', 'green'), default='pos',
+                        help='pulse extraction method (default: pos)')
     parser.add_argument('--duration', type=float, default=DEFAULT_DURATION,
                         help='synthetic case duration in seconds (default %(default)s)')
     args = parser.parse_args()
@@ -263,14 +266,15 @@ def main():
     if not args.synthetic and not args.clips:
         parser.error('choose at least one of --synthetic / --clips')
 
+    use_pos = (args.method == 'pos')
     results = []
     if args.synthetic:
         print(f"Synthetic suite ({len(SYNTHETIC_SUITE)} cases, "
-              f"{args.duration:.0f}s each, fs=30) ...")
-        results.extend(run_synthetic_suite(args.duration))
+              f"{args.duration:.0f}s each, fs=30, method={args.method}) ...")
+        results.extend(run_synthetic_suite(args.duration, use_pos=use_pos))
     if args.clips:
-        print(f"Clip suite from {args.clips} ...")
-        results.extend(run_clip_suite(args.clips))
+        print(f"Clip suite from {args.clips} (method={args.method}) ...")
+        results.extend(run_clip_suite(args.clips, use_pos=use_pos))
 
     print_report(results)
 
@@ -279,6 +283,7 @@ def main():
             'label': args.label or datetime.now().strftime('%Y-%m-%d %H:%M'),
             'timestamp': datetime.now().isoformat(timespec='seconds'),
             'git_revision': git_revision(),
+            'method': args.method,
             'results': results,
         }
         os.makedirs(os.path.dirname(os.path.abspath(args.json)), exist_ok=True)
