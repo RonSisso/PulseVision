@@ -1,3 +1,5 @@
+"""User-creation form (Administrator only)."""
+
 import os
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout,
                            QPushButton, QLabel, QLineEdit, QComboBox, QMessageBox)
@@ -8,6 +10,8 @@ from database.db import Database
 from .base_window import BaseWindow
 
 class AddUserWindow(BaseWindow):
+    """Form for creating a new application user with a chosen role."""
+
     def __init__(self, user_role='Administrator'):
         # Initialize with back button but no power off button
         super().__init__(show_back_button=True, show_power_off=False)

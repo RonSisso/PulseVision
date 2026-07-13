@@ -1,9 +1,19 @@
+"""Face and ROI detection using MediaPipe Face Mesh."""
+
 import cv2
 import numpy as np
 import mediapipe as mp
 import logging
 
 class FaceDetector:
+    """Detect a face and extract the three skin ROIs used for rPPG.
+
+    Wraps MediaPipe Face Mesh (468 landmarks) and derives three regions of interest
+    (forehead + both cheeks) from the landmark bounding box. ROI rectangles are
+    exponential-moving-average smoothed (``ema_alpha``) to suppress the per-frame jitter
+    of the detector, which would otherwise inject fake brightness changes into the signal.
+    """
+
     def __init__(self, ema_alpha=0.6):
         self.logger = logging.getLogger('PulseVision.FaceDetector')
         self.mp_face_mesh = mp.solutions.face_mesh

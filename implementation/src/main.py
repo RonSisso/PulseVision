@@ -1,3 +1,5 @@
+"""Application entry point: configures logging and launches the PyQt5 login window."""
+
 import sys
 import os
 import logging

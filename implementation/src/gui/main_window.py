@@ -1,3 +1,5 @@
+"""Measurement control panel: the live rPPG UI and its real-time plots."""
+
 import cv2
 import numpy as np
 import time
@@ -18,6 +20,15 @@ from database.db import Database
 
 
 class MainWindow(BaseWindow):
+    """Live measurement screen — the UI half of the pipeline.
+
+    Owns the patient selector, video source controls, and the three real-time plots
+    (rPPG signal, heart-rate trend, FFT spectrum). Measurement itself runs off-thread in
+    a ``ProcessingWorker``; this window only starts/stops that worker and renders the
+    frames and ``MeasurementUpdate`` objects it emits — no capture or DSP happens on the
+    GUI thread. Accepted readings are persisted via a shared ``Database`` (throttled).
+    """
+
     # Interval between plot redraws (matplotlib full redraws are expensive)
     PLOT_INTERVAL_MS = 250
     # Minimum seconds between instantaneous-measurement database writes

@@ -1,9 +1,17 @@
+"""Standalone admin panel for user management (add users, list users)."""
+
 from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QPushButton, QLabel, QLineEdit, QComboBox, QTableWidget,
                              QTableWidgetItem, QMessageBox)
 from database.db import Database
 
 class AdminWindow(QMainWindow):
+    """Administrator panel for creating users and viewing the user table.
+
+    A self-contained ``QMainWindow`` (not a ``BaseWindow``) with a create-user form, a
+    table of existing users, and navigation to the heart-rate monitor and back to login.
+    """
+
     def __init__(self):
         super().__init__()
         self.db = Database()

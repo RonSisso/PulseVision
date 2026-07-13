@@ -1,3 +1,5 @@
+"""Video capture from a webcam or file, with frame-rate control and recovery."""
+
 import cv2
 import numpy as np
 import os
@@ -5,6 +7,13 @@ import logging
 import time
 
 class VideoCapture:
+    """Thin wrapper over ``cv2.VideoCapture`` for webcam or video-file input.
+
+    Handles opening a source (trying several camera backends on Windows), basic
+    frame-rate limiting, integrity checks, and best-effort recovery when a webcam
+    read fails. Video-file sources return ``None`` at end-of-stream.
+    """
+
     def __init__(self):
         """Initialize video capture."""
         # Set up logging

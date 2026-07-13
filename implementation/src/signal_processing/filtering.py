@@ -1,3 +1,10 @@
+"""Heart-rate post-filtering and ROI stability checking.
+
+`HeartRateFilter` is the single temporal-smoothing/outlier-rejection stage applied to raw
+per-window BPM estimates; `ROIStabilityChecker` decides whether an ROI patch contains
+usable textured skin.
+"""
+
 from collections import deque
 
 import cv2
@@ -54,10 +61,18 @@ class HeartRateFilter:
 
 
 class ROIStabilityChecker:
+    """Flag an ROI as usable only if it contains enough spatial texture.
+
+    Real skin under real lighting has texture (a non-trivial grayscale standard
+    deviation); a flat patch (a wall, a blurred smear, an occlusion) does not. The
+    threshold is relaxed for smaller ROIs such as the cheeks.
+    """
+
     def __init__(self, min_std=3.0):  # Reduced from 5.0 to 3.0 for less sensitivity
         self.min_std = min_std
 
     def is_stable(self, roi_patch):
+        """Return True if the patch's grayscale texture exceeds a size-adaptive threshold."""
         gray = cv2.cvtColor(roi_patch, cv2.COLOR_BGR2GRAY)
         std_dev = np.std(gray)
 

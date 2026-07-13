@@ -1,3 +1,5 @@
+"""Measurement history view: past measurement sessions per patient."""
+
 import logging
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
@@ -11,6 +13,12 @@ from .base_window import BaseWindow
 
 
 class MeasurementHistoryWindow(BaseWindow):
+    """Browse a selected patient's saved measurement sessions.
+
+    Lets the user pick a patient and shows their stored ``measurement_sessions``
+    (average BPM, status, date/time, duration) in a colour-coded table.
+    """
+
     def __init__(self, user_role=None):
         super().__init__(show_back_button=True, show_power_off=False)
         self.user_role = user_role
@@ -19,6 +27,7 @@ class MeasurementHistoryWindow(BaseWindow):
         self.load_patients()
 
     def init_ui(self):
+        """Build the patient selector and the measurement-history table."""
         main_widget = QWidget()
         main_layout = QVBoxLayout(main_widget)
 

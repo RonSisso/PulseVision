@@ -1,3 +1,10 @@
+"""Standalone script to create the database and seed the default admin user.
+
+The main app also initializes the schema on startup via ``database.db.Database``; this
+script is a convenience for setting up ``users.db`` without launching the GUI. Run with
+``python src/database/init_db.py``.
+"""
+
 import os
 import sqlite3
 import bcrypt

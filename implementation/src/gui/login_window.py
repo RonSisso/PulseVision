@@ -1,3 +1,5 @@
+"""Login screen: an HTML/JS form rendered in a web view, bridged to Python."""
+
 import os
 import logging
 from PyQt5.QtWidgets import QMessageBox
@@ -67,6 +69,13 @@ class WebBridge(QObject):
             QMessageBox.critical(self.login_window, "Error", error_msg)
 
 class LoginWindow(BaseWindow):
+    """Application login window.
+
+    Renders ``templates/login.html`` in a ``QWebEngineView`` and connects it to a
+    ``WebBridge`` over a ``QWebChannel`` so the JavaScript form can call back into Python
+    to verify credentials. On success it opens the ``HomeWindow`` for the user's role.
+    """
+
     def __init__(self):
         self.logger = logging.getLogger(__name__)
         # Initialize with no back button but with power off button

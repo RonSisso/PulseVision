@@ -1,3 +1,5 @@
+"""Home dashboard: role-based navigation hub shown after login."""
+
 import os
 from PyQt5.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel
 from PyQt5.QtCore import Qt
@@ -10,6 +12,13 @@ from .measurement_history_window import MeasurementHistoryWindow
 from .base_window import BaseWindow
 
 class HomeWindow(BaseWindow):
+    """Main menu after login; the navigation entry point to every feature.
+
+    Adapts its layout to the screen aspect ratio and shows actions gated by
+    ``user_role`` (Administrators additionally get user management). Launches the
+    measurement, add-patient, add-user, and measurement-history windows.
+    """
+
     def __init__(self, user_role=None):
         # Initialize with no back button but with power off button
         super().__init__(show_back_button=False, show_power_off=True)

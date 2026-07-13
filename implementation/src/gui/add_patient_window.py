@@ -1,3 +1,5 @@
+"""Patient registration form."""
+
 import os
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout,
                            QPushButton, QLabel, QLineEdit, QMessageBox)
@@ -8,6 +10,8 @@ from database.db import Database
 from .base_window import BaseWindow
 
 class AddPatientWindow(BaseWindow):
+    """Form for registering a new patient and saving them to the database."""
+
     def __init__(self,user_role=None):
         # Initialize with back button but no power off button
         super().__init__(show_back_button=True, show_power_off=False)

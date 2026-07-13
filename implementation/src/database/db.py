@@ -1,3 +1,5 @@
+"""SQLite persistence for users, patients, and heart-rate measurements."""
+
 import sqlite3
 import bcrypt
 from datetime import datetime
@@ -6,6 +8,14 @@ import json
 import logging
 
 class Database:
+    """Access layer for the application's SQLite database.
+
+    Owns a single connection (stored at ``src/data/users.db``), creates the schema on
+    first use, and seeds a default ``admin`` / ``admin123`` Administrator if no users
+    exist. Tables: ``users``, ``patients``, per-reading ``measurements``, and
+    ``measurement_sessions`` (per-session averages). Passwords are bcrypt-hashed.
+    """
+
     def __init__(self):
         """Initialize database connection."""
         try:

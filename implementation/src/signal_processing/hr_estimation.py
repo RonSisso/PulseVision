@@ -1,3 +1,5 @@
+"""Frequency-domain heart rate estimation (see HeartRateEstimator)."""
+
 import numpy as np
 from scipy.signal import find_peaks, welch
 

@@ -1,3 +1,5 @@
+"""Shared base window for the PyQt5 GUI."""
+
 from PyQt5.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QLabel, QPushButton, QStyle, QApplication, QHBoxLayout
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont, QColor, QPixmap, QIcon
@@ -5,7 +7,21 @@ import os
 from utils.path_utils import get_assets_path
 
 class BaseWindow(QMainWindow):
+    """Fullscreen window base providing the common chrome and responsive scaling.
+
+    Builds the header bar (title plus optional back / power-off buttons) and a
+    ``content_layout`` for subclasses to populate, and exposes ``scaled()`` so child
+    widgets size themselves relative to the screen. Subclasses that show a back button
+    should override ``go_back()``.
+    """
+
     def __init__(self, show_back_button=True, show_power_off=True):
+        """Build the base UI.
+
+        Args:
+            show_back_button: show a header back button wired to ``go_back()``.
+            show_power_off: show a header button that quits the application.
+        """
         super().__init__()
         self.show_back_button = show_back_button
         self.show_power_off = show_power_off
